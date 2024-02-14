@@ -1,0 +1,36 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Go binary
+/bin/
+
+# Go build artifacts
+*.o
+*.a
+*.exe
+
+# Ignore the vendor directory
+/vendor/
+
+# Ignore macOS specific files
+.DS_Store
+
+# Ignore the IntelliJ IDEA project folder
+.idea/
+
+# Ignore the Visual Studio Code folder
+.vscode/
+
+# Ignore system and temporary files
+*.log
+*.swp
+*~
+
+/p2p
