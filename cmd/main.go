@@ -6,6 +6,7 @@ import (
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
+	daemon "github.com/aymanbagabas/go-git-daemon"
 	"github.com/ipfs/go-log/v2"
 )
 
@@ -32,15 +33,38 @@ func main() {
 		return
 	}
 
+	// Initialize peers, DHT and p2p protocol
 	peer, err := p2p.Initialize(config)
 	if err != nil {
-		logger.Fatalf("failed to initialize P2P: %v", err)
+		logger.Fatalf("Failed to initialize P2P: %v", err)
+	} else {
+		logger.Info("Initialized Peer")
 	}
 
-	err = api.StartServer(ctx, peer)
-	if err != nil {
-		logger.Fatalf("failed to start grpc server: %v", err)
+	// Initialize gRPC server
+	go func() {
+		if err := api.StartServer(ctx, peer); err != nil {
+			logger.Fatalf("Failed to start gRPC server: %v", err)
+		}
+	}()
+
+	logger.Info("Started gRPC server")
+
+	daemon.Enable(daemon.UploadPackService)
+	daemon.Enable(daemon.UploadArchiveService)
+	daemon.Enable(daemon.ReceivePackService)
+
+	daemon.DefaultServer.BasePath = "./repos"
+	daemon.DefaultServer.Verbose = true
+	daemon.DefaultServer.ExportAll = true
+	daemon.DefaultServer.StrictPaths = false
+
+	// Start server on the default port :9418
+	if err := daemon.ListenAndServe(":9418"); err != nil {
+		logger.Fatal(err)
 	}
+
+	logger.Info("Started Git Daemon Server")
 
 	select {}
 }
