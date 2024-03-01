@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	constants "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
 
 	"github.com/ipfs/go-log/v2"
@@ -53,7 +54,7 @@ func Initialize(config flags.Config) (*Peer, error) {
 		select {}
 	}
 
-	host.SetStreamHandler("/p2p/peerinfo/1.0.0", func(s network.Stream) {
+	host.SetStreamHandler(constants.PeerPortsProtocol, func(s network.Stream) {
 		handlePeerInfoStream(s, config.GrpcPort, config.GitDaemonPort)
 	})
 
@@ -152,7 +153,7 @@ func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
 	defer cancel()
 
 	logger.Infof("Opening stream to peer: %s", peerID.Pretty())
-	s, err := p.Host.NewStream(ctx, peerID, "/p2p/peerinfo/1.0.0")
+	s, err := p.Host.NewStream(ctx, peerID, constants.PeerPortsProtocol)
 	if err != nil {
 		logger.Errorf("Error opening stream: %v", err)
 		return nil, fmt.Errorf("Failed to open stream to peer: %w", err)
