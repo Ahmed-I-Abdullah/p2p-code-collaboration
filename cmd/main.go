@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/gitops"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
 	daemon "github.com/aymanbagabas/go-git-daemon"
 	"github.com/ipfs/go-log/v2"
@@ -41,27 +44,37 @@ func main() {
 		logger.Info("Initialized Peer")
 	}
 
+	git := gitops.New(config.ReposDirectory)
+
 	// Initialize gRPC server
 	go func() {
-		if err := api.StartServer(ctx, peer); err != nil {
+		if err := api.StartServer(ctx, peer, git); err != nil {
 			logger.Fatalf("Failed to start gRPC server: %v", err)
 		}
 	}()
-
 	logger.Info("Started gRPC server")
 
+	// Create directory where repos will be stored
+	if _, err := os.Stat(config.ReposDirectory); os.IsNotExist(err) {
+		err := os.Mkdir(config.ReposDirectory, 0755)
+		if err != nil {
+			logger.Fatalf("Failed to create repos directory: %v", err)
+		}
+	}
+
+	// Enable all Git Daemon services
 	daemon.Enable(daemon.UploadPackService)
 	daemon.Enable(daemon.UploadArchiveService)
 	daemon.Enable(daemon.ReceivePackService)
 
-	daemon.DefaultServer.BasePath = "./repos"
+	daemon.DefaultServer.BasePath = config.ReposDirectory
 	daemon.DefaultServer.Verbose = true
 	daemon.DefaultServer.ExportAll = true
 	daemon.DefaultServer.StrictPaths = false
 
-	// Start server on the default port :9418
-	if err := daemon.ListenAndServe(":9418"); err != nil {
-		logger.Fatal(err)
+	daemonAddress := fmt.Sprintf(":%d", config.GitDaemonPort)
+	if err := daemon.ListenAndServe(daemonAddress); err != nil {
+		logger.Fatalf("Failed to start git daemon: %v", err)
 	}
 
 	logger.Info("Started Git Daemon Server")

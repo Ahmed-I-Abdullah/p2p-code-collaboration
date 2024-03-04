@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"sync"
 	"time"
 
 	constants "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
 
+	"github.com/ipfs/boxo/ipns"
 	"github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	record "github.com/libp2p/go-libp2p-record"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -29,7 +30,7 @@ type Peer struct {
 	RoutingDiscovery *drouting.RoutingDiscovery
 	GrpcPort         int
 	GitDaemonPort    int
-	sync.RWMutex
+	BootstrapPeers   flags.AddrList
 }
 
 func Initialize(config flags.Config) (*Peer, error) {
@@ -44,7 +45,20 @@ func Initialize(config flags.Config) (*Peer, error) {
 	logger.Infof("Host created. ID: %s", host.ID())
 	logger.Infof("Listening on addresses: %v", host.Addrs())
 
-	kademliaDHT, err := dht.New(ctx, host, dht.Mode(dht.ModeServer))
+	validator := record.NamespacedValidator{
+		"pk":   record.PublicKeyValidator{},
+		"ipns": ipns.Validator{},
+		"repo": RepoValidator{},
+	}
+
+	dhtOptions := []dht.Option{
+		dht.Mode(dht.ModeServer),
+		dht.ProtocolPrefix(constants.DHTRepoPrefix),
+		dht.Validator(validator),
+	}
+
+	kademliaDHT, err := dht.New(ctx, host, dhtOptions...)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
@@ -90,6 +104,7 @@ func Initialize(config flags.Config) (*Peer, error) {
 		RoutingDiscovery: routingDiscovery,
 		GrpcPort:         config.GrpcPort,
 		GitDaemonPort:    config.GitDaemonPort,
+		BootstrapPeers:   config.BootstrapPeers,
 	}
 
 	return peer, nil
@@ -118,6 +133,32 @@ func handlePeerInfoStream(s network.Stream, grpcPort, gitDaemonPort int) {
 	logger.Infof("Peer info sent successfully")
 	s.Close()
 }
+
+// func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
+// 	go func() {
+// 		logger.Info("Searching for other peers...")
+
+// 		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
+// 		if err != nil {
+// 			logger.Errorf("failed to find peers: %v", err)
+// 			return
+// 		}
+
+// 		for foundPeer := range peerChan {
+// 			// Skip the peer if it is the host itself.
+// 			if foundPeer.ID == host.ID() {
+// 				continue
+// 			}
+
+// 			err := host.Connect(ctx, foundPeer)
+// 			if err != nil {
+// 				logger.Errorf("failed to connect to peer %s: %v", foundPeer.ID, err)
+// 			} else {
+// 				logger.Infof("Connected to peer: %s", foundPeer.ID)
+// 			}
+// 		}
+// 	}()
+// }
 
 func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
 	go func() {
@@ -198,4 +239,32 @@ func (p *Peer) IsPeerUp(peerId peer.ID) bool {
 
 func (p *Peer) GetPeers() []peer.ID {
 	return p.Host.Peerstore().Peers()
+}
+
+func (p *Peer) IsBootstrapNode(peerID peer.ID) bool {
+	for _, addr := range p.BootstrapPeers {
+		addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
+		if err != nil {
+			continue
+		}
+
+		if addrInfo.ID == peerID {
+			return true
+		}
+	}
+
+	// If no match is found in the loop, the peer is not a bootstrap peer
+	return false
+}
+
+func (p *Peer) storeInDHT(ctx context.Context, key string, data []byte) error {
+	logger.Infof("Storing data in DHT with key %s", key)
+
+	err := p.DHT.PutValue(ctx, key, data)
+
+	if err != nil {
+		logger.Errorf("Failed to store value with key %s in DHT", key)
+	}
+
+	return err
 }
