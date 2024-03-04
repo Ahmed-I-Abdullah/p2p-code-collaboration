@@ -2,140 +2,188 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api/pb"
+	constansts "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/gitops"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
 	"github.com/ipfs/go-log"
+	"github.com/libp2p/go-libp2p-core/routing"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"go.uber.org/multierr"
 	"google.golang.org/grpc"
 )
+
+var logger = log.Logger("grpcService")
 
 type RepositoryService struct {
 	pb.UnimplementedRepositoryServer
 	Peer *p2p.Peer
+	Git  *gitops.Git
 }
 
 func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
-	// How many peers we are going to store the repository on
-	replicationFactor := 2
-
-	logger := log.Logger("grpcService")
 	log.SetLogLevel("grpcService", "info")
-
+	replicationFactor := 1
 	logger.Info("Received request to initialize a repository")
 
-	// If the request is directly from the cli, choose random peers, etc
 	if req.FromCli {
+		// Initial process remains the same
+		existingRepository, err := s.Peer.DHT.GetValue(ctx, getDHTPathFromRepoName(req.Name))
+
+		if err != routing.ErrNotFound && err != nil {
+			logger.Errorf("Failed to check if repository with key %s exists in DHT: %v", req.Name, err)
+			return &pb.RepoInitResponse{
+					Success: false,
+					Message: "Failed to check if repository exists in DHT",
+				},
+				fmt.Errorf("Error fetching repository from DHT: %w", err)
+		}
+
+		if existingRepository != nil {
+			return &pb.RepoInitResponse{
+				Success: false,
+				Message: "Repository already exits",
+			}, errors.New("Repository already exits")
+		}
+
 		var onlinePeers []peer.ID
 		allPeers := s.Peer.GetPeers()
-		for i := 0; len(onlinePeers) < replicationFactor && i < len(allPeers); i++ {
 
-			// TODO: Do not connect to boostrap
-			if allPeers[i] == s.Peer.Host.ID() {
+		for i := 0; i < len(allPeers); i++ {
+			if allPeers[i] == s.Peer.Host.ID() || s.Peer.IsBootstrapNode(allPeers[i]) {
 				continue
 			}
 			logger.Infof("Current peer ID is %s", allPeers[i].Pretty())
 			onlinePeers = append(onlinePeers, allPeers[i])
 		}
 
-		if len(onlinePeers) != replicationFactor {
-			return nil, fmt.Errorf("only found %d online peers", len(onlinePeers))
+		if len(onlinePeers) < replicationFactor {
+			return &pb.RepoInitResponse{Success: false, Message: fmt.Sprintf("only found %d online peers, expected %d", len(onlinePeers), replicationFactor)}, fmt.Errorf("only found %d online peers, expected %d", len(onlinePeers), replicationFactor)
 		}
 
-		for _, p := range onlinePeers {
-			peerAddresses := s.Peer.Host.Peerstore().Addrs(p)
+		successfulPeers := make([]peer.ID, 0)
+		var errs []error
 
-			if len(peerAddresses) == 0 {
-				return nil, fmt.Errorf("no known addresses for peer %s", p)
-			}
-			peerAddress := peerAddresses[0]
+		for len(successfulPeers) < replicationFactor && len(onlinePeers) > 0 {
+			p := onlinePeers[0] // choose a peer
+			success, err := s.signalCreateNewRepository(ctx, p, req.Name)
 
-			peerPorts, err := s.Peer.GetPeerPorts(p)
-
-			if err != nil {
-				// Need to handle error if peers didnt create repo..
-				logger.Errorf("Failed to get peer ports: %v", err)
-				continue
+			if success {
+				successfulPeers = append(successfulPeers, p)
+			} else {
+				errs = append(errs, fmt.Errorf("failed processing peer %v: %w", p, err))
 			}
 
-			ipAddress, err := extractIPAddr(peerAddress.String())
-			if err != nil {
-				logger.Errorf("Failed to get peer IP Adress: %v", err)
-				continue
-			}
+			// Regardless of success or failure, we remove the peer from the slice
+			onlinePeers = onlinePeers[1:]
+		}
 
-			target := fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
+		if len(successfulPeers) < replicationFactor {
+			return &pb.RepoInitResponse{
+				Success: false,
+				Message: fmt.Sprintf("Could not create repo on all %v peers, created on %v peers. Errors: %v", replicationFactor, len(successfulPeers), multierr.Combine(errs...)),
+			}, fmt.Errorf("Could not create repo on all %v peers, created on %v peers. Errors: %w", replicationFactor, len(successfulPeers), multierr.Combine(errs...))
+		}
 
-			logger.Infof("Connecting to peer %s at address %s for gRPC communication\n", p, target)
-			conn, err := grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock())
-			if err != nil {
-				logger.Errorf("Failed to connect: %v", err)
-			}
-			defer conn.Close()
+		repo := p2p.RepositoryPeers{
+			PeerIDs:        successfulPeers,
+			InSyncReplicas: nil, // TODO: Fix this later
+		}
 
-			logger.Infof("Connected to gRPC server of peer %s.", p)
-
-			c := pb.NewRepositoryClient(conn)
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-
-			_, err = c.Init(ctx, &pb.RepoInitRequest{Name: req.Name, FromCli: false})
-
-			if err != nil {
-				// Need tom handle error if peers didnt create repo..
-				logger.Errorf("Failed to initialize repository: %v", err)
-			}
+		if err := s.storeRepoInDHT(ctx, req.Name, repo); err != nil {
+			return &pb.RepoInitResponse{
+				Success: false,
+				Message: "Failed to store repository details in DHT",
+			}, err
 		}
 
 		return &pb.RepoInitResponse{
 			Success: true,
 			Message: "Repo created",
 		}, nil
-
-	} else {
-		if req.Name == "" {
-			return &pb.RepoInitResponse{
-				Success: false,
-				Message: "Repository name is empty",
-			}, nil
-		}
-
-		err := createBareRepository(req.Name)
-
-		if err != nil {
-			return &pb.RepoInitResponse{
-				Success: false,
-				Message: "Failed to create file: " + err.Error(),
-			}, nil
-		}
-
-		return &pb.RepoInitResponse{
-			Success: true,
-			Message: "File created successfully",
-		}, nil
-
 	}
+
+	// if the request is not from CLI
+	if req.Name == "" {
+		return &pb.RepoInitResponse{
+			Success: false,
+			Message: "Repository name is empty",
+		}, errors.New("Repository name is empty")
+	}
+
+	err := s.Git.InitBare(req.Name)
+	if err != nil {
+		return &pb.RepoInitResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to create file: %v", err),
+		}, nil
+	}
+
+	return &pb.RepoInitResponse{
+		Success: true,
+		Message: "Repository created successfully",
+	}, nil
 }
 
-func createBareRepository(repositoryName string) error {
+func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p peer.ID, repoName string) (bool, error) {
+	peerAddresses := s.Peer.Host.Peerstore().Addrs(p)
 
-	// For now we just create a file in the current directory
-	// TODO:
-	// 1- Get repository storage path from config
-	// 2- Run git command to create bare repositroy there
-	f, err := os.Create(repositoryName)
+	if len(peerAddresses) == 0 {
+		return false, fmt.Errorf("no known addresses for peer %s", p)
+	}
+	peerAddress := peerAddresses[0]
+
+	peerPorts, err := s.Peer.GetPeerPorts(p)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("failed to get peer ports: %w", err)
 	}
 
-	defer f.Close()
+	ipAddress, err := extractIPAddr(peerAddress.String())
+	if err != nil {
+		return false, fmt.Errorf("failed to get peer IP Adress: %w", err)
+	}
 
+	target := fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
+
+	logger.Infof("Connecting to peer %s at address %s for gRPC communication\n", p, target)
+	conn, err := grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		return false, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	logger.Infof("Connected to gRPC server of peer %s.", p)
+
+	c := pb.NewRepositoryClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err = c.Init(ctx, &pb.RepoInitRequest{Name: repoName, FromCli: false})
+
+	if err != nil {
+		return false, fmt.Errorf("failed to initialize repository: %w", err)
+	}
+
+	return true, nil
+}
+
+func (s *RepositoryService) storeRepoInDHT(ctx context.Context, key string, repo p2p.RepositoryPeers) error {
+	repoBytes, err := json.Marshal(repo)
+	if err != nil {
+		return fmt.Errorf("failed to serialize repository peers data: %w", err)
+	}
+
+	if err := s.Peer.DHT.PutValue(ctx, getDHTPathFromRepoName(key), repoBytes); err != nil {
+		return fmt.Errorf("failed to store repository peers data in DHT: %w", err)
+	}
 	return nil
 }
 
@@ -148,7 +196,11 @@ func extractIPAddr(address string) (string, error) {
 	return parts[2], nil
 }
 
-func StartServer(ctx context.Context, peer *p2p.Peer) error {
+func getDHTPathFromRepoName(repoName string) string {
+	return fmt.Sprintf("%s/%s", constansts.DHTRepoPrefix, repoName)
+}
+
+func StartServer(ctx context.Context, peer *p2p.Peer, git *gitops.Git) error {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", peer.GrpcPort))
 	if err != nil {
 		return err
@@ -156,7 +208,7 @@ func StartServer(ctx context.Context, peer *p2p.Peer) error {
 
 	s := grpc.NewServer()
 
-	pb.RegisterRepositoryServer(s, &RepositoryService{Peer: peer})
+	pb.RegisterRepositoryServer(s, &RepositoryService{Peer: peer, Git: git})
 
 	return s.Serve(lis)
 }
