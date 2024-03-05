@@ -16,7 +16,7 @@ import (
 const (
 	// change this hehe
 	address     = "127.0.0.1:3000"
-	defaultName = "HelloWorld"
+	defaultName = "Amino"
 )
 
 func main() {

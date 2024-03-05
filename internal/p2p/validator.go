@@ -21,4 +21,25 @@ func (RepoValidator) Validate(key string, value []byte) error {
 	return nil
 }
 
-func (RepoValidator) Select(key string, value [][]byte) (int, error) { return 0, nil }
+func (RepoValidator) Select(key string, values [][]byte) (int, error) {
+	var highestVersionIndex int
+	highestVersion := -1
+
+	for i, value := range values {
+		var repoPeers RepositoryPeers
+		if err := json.Unmarshal(value, &repoPeers); err != nil {
+			return -1, fmt.Errorf("data is not a valid RepositoryPeers object: %w", err)
+		}
+
+		if repoPeers.Version > highestVersion {
+			highestVersion = repoPeers.Version
+			highestVersionIndex = i
+		}
+	}
+
+	if highestVersion == -1 {
+		return -1, errors.New("no valid RepositoryPeers objects found")
+	}
+
+	return highestVersionIndex, nil
+}

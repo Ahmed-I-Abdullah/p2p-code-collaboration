@@ -14,8 +14,8 @@ import (
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/gitops"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
 	"github.com/ipfs/go-log"
-	"github.com/libp2p/go-libp2p-core/routing"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/routing"
 	"go.uber.org/multierr"
 	"google.golang.org/grpc"
 )
@@ -30,7 +30,7 @@ type RepositoryService struct {
 
 func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
 	log.SetLogLevel("grpcService", "info")
-	replicationFactor := 1
+	replicationFactor := 2
 	logger.Info("Received request to initialize a repository")
 
 	if req.FromCli {
@@ -95,6 +95,7 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 		repo := p2p.RepositoryPeers{
 			PeerIDs:        successfulPeers,
 			InSyncReplicas: nil, // TODO: Fix this later
+			Version:        1,
 		}
 
 		if err := s.storeRepoInDHT(ctx, req.Name, repo); err != nil {
