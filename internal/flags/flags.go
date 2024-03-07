@@ -6,12 +6,13 @@ import (
 	"flag"
 	"strings"
 
+	constansts "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
 	maddr "github.com/multiformats/go-multiaddr"
 )
 
-type addrList []maddr.Multiaddr
+type AddrList []maddr.Multiaddr
 
-func (al *addrList) String() string {
+func (al *AddrList) String() string {
 	strs := make([]string, len(*al))
 	for i, addr := range *al {
 		strs[i] = addr.String()
@@ -19,7 +20,7 @@ func (al *addrList) String() string {
 	return strings.Join(strs, ",")
 }
 
-func (al *addrList) Set(value string) error {
+func (al *AddrList) Set(value string) error {
 	addr, err := maddr.NewMultiaddr(value)
 	if err != nil {
 		return err
@@ -41,10 +42,13 @@ func StringsToAddrs(addrStrings []string) (maddrs []maddr.Multiaddr, err error) 
 
 type Config struct {
 	RendezvousString string
-	BootstrapPeers   addrList
-	ListenAddresses  addrList
-	ProtocolID       string
+	ReposDirectory   string
+	PrivateKeyFile   string
+	BootstrapPeers   AddrList
+	ListenAddresses  AddrList
 	IsBootstrap      bool
+	GrpcPort         int
+	GitDaemonPort    int
 }
 
 func ParseFlags() (Config, error) {
@@ -52,8 +56,11 @@ func ParseFlags() (Config, error) {
 	flag.StringVar(&config.RendezvousString, "rendezvous", "meet me here", "Unique string to identify group of nodes.")
 	flag.Var(&config.BootstrapPeers, "peer", "Adds a peer multiaddress to the bootstrap list")
 	flag.Var(&config.ListenAddresses, "listen", "Adds a multiaddress to the listen list")
-	flag.StringVar(&config.ProtocolID, "pid", "/p2p/1.0.0", "Sets a protocol id for stream headers")
 	flag.BoolVar(&config.IsBootstrap, "is_bootstrap", false, "Whether the node is a bootstrap node.")
+	flag.IntVar(&config.GrpcPort, "grpcport", 0, "The Grpc server port")
+	flag.IntVar(&config.GitDaemonPort, "gitport", 0, "The port for the git daemon")
+	flag.StringVar(&config.ReposDirectory, "repos_dir", "./repos", "Directory to serve git repos from")
+	flag.StringVar(&config.PrivateKeyFile, "priv_key", constansts.PeerPrivateKeyPath, "File to store the peer's private key")
 	flag.Parse()
 
 	return config, nil

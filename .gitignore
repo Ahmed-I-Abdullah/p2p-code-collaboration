@@ -34,3 +34,5 @@
 *~
 
 /p2p
+.priv_key*
+repos*
