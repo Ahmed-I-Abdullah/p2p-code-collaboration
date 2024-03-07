@@ -56,10 +56,14 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 		var onlinePeers []peer.ID
 		allPeers := s.Peer.GetPeers()
 
+		// Always include the current peer as one of the peers storing the repository
+		onlinePeers = append(onlinePeers, s.Peer.Host.ID())
+
 		for i := 0; i < len(allPeers); i++ {
 			if allPeers[i] == s.Peer.Host.ID() || s.Peer.IsBootstrapNode(allPeers[i]) {
 				continue
 			}
+
 			logger.Infof("Current peer ID is %s", allPeers[i].Pretty())
 			onlinePeers = append(onlinePeers, allPeers[i])
 		}
@@ -134,6 +138,15 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 }
 
 func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p peer.ID, repoName string) (bool, error) {
+	if p == s.Peer.Host.ID() {
+		logger.Info("Initializing repository on current host")
+		_, err := s.Init(ctx, &pb.RepoInitRequest{Name: repoName, FromCli: false})
+		if err != nil {
+			return false, fmt.Errorf("failed to initialize repository on current host: %w", err)
+		}
+		return true, nil
+	}
+
 	peerAddresses := s.Peer.Host.Peerstore().Addrs(p)
 
 	if len(peerAddresses) == 0 {
