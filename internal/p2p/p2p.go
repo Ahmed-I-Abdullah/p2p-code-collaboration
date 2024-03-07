@@ -3,13 +3,15 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/dgraph-io/badger/v4"
 	"io/ioutil"
 	"time"
 
 	constants "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
-
 	"github.com/ipfs/boxo/ipns"
 	"github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
@@ -96,8 +98,6 @@ func Initialize(config flags.Config) (*Peer, error) {
 	dutil.Advertise(ctx, routingDiscovery, config.RendezvousString)
 	logger.Info("Successfully announced!")
 
-	connectToPeers(ctx, routingDiscovery, host, config.RendezvousString)
-
 	peer := &Peer{
 		Host:             host,
 		DHT:              kademliaDHT,
@@ -106,6 +106,8 @@ func Initialize(config flags.Config) (*Peer, error) {
 		GitDaemonPort:    config.GitDaemonPort,
 		BootstrapPeers:   config.BootstrapPeers,
 	}
+
+	peer.connectToPeers(ctx, routingDiscovery, host, config.RendezvousString)
 
 	return peer, nil
 }
@@ -160,7 +162,8 @@ func handlePeerInfoStream(s network.Stream, grpcPort, gitDaemonPort int) {
 // 	}()
 // }
 
-func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
+func (p *Peer) connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
+
 	go func() {
 		logger.Info("Searching for other peers...")
 		for {
@@ -180,6 +183,31 @@ func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDisco
 				if err != nil {
 					logger.Errorf("failed to connect to peer %s: %v", foundPeer.ID, err)
 				} else {
+
+					err := database.DBCon.Update(func(txn *badger.Txn) error {
+						item, err := txn.Get([]byte(foundPeer.ID))
+						if err == nil {
+							item.Value(func(val []byte) error {
+								logger.Debugf(" entry for peerID %v already exists. Here is the data: %s", foundPeer.ID, val)
+								return nil
+							})
+							return nil
+						}
+						if !errors.Is(err, badger.ErrKeyNotFound) {
+							logger.Errorf(" could not get database information: %v", err)
+							return err
+						}
+						peerInfo, err := p.GetPeerPorts(foundPeer.ID)
+						value, err := json.Marshal(peerInfo)
+						if err != nil {
+							logger.Fatalf("failed to marshal peer info")
+						}
+						updateErr := txn.Set([]byte(foundPeer.ID), value)
+						return updateErr
+					})
+					if err != nil {
+						logger.Error(err)
+					}
 					logger.Infof("Connected to peer: %s", foundPeer.ID)
 				}
 			}
@@ -227,6 +255,32 @@ func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
 
 	logger.Infof("Peer %s is listening on gRPC port %s and git Daemon port %s", peerID.Pretty(), info.GrpcPort, info.GitDaemonPort)
 
+	return &info, nil
+}
+
+func (p *Peer) GetPeerPortsFromDB(peerID peer.ID) (*PeerInfo, error) {
+	var valCpy []byte
+	err := database.DBCon.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte(peerID))
+		if err != nil {
+			return err
+		}
+		valCpy, err = item.ValueCopy(nil)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Errorf("could not get key %v : %v", peerID, err)
+		return nil, err
+	}
+	var info PeerInfo
+	err = json.Unmarshal(valCpy, &info)
+	if err != nil {
+		logger.Errorf("Error unmarshaling peer info: %v", err)
+		return nil, fmt.Errorf("Error unmarshaling peer info: %w", err)
+	}
 	return &info, nil
 }
 

@@ -141,7 +141,7 @@ func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p pee
 	}
 	peerAddress := peerAddresses[0]
 
-	peerPorts, err := s.Peer.GetPeerPorts(p)
+	peerPorts, err := s.Peer.GetPeerPortsFromDB(p)
 	if err != nil {
 		return false, fmt.Errorf("failed to get peer ports: %w", err)
 	}
