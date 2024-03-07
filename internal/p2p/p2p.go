@@ -40,7 +40,7 @@ func Initialize(config flags.Config) (*Peer, error) {
 	log.SetLogLevel("p2p", "info")
 	ctx := context.Background()
 
-	priv, err := RetrievePrivateKey(constants.PeerPrivateKeyPath)
+	priv, err := RetrievePrivateKey(config.PrivateKeyFile)
 	if err != nil {
 		return nil, err
 	}
