@@ -45,6 +45,8 @@ go build  -o p2p ./cmd/main.go
 
 - **repos_dir:** Specifies the directory from which Git repositories are served. This directory holds the shared code repositories accessible to nodes in the P2P network. (default: "./repos")
 
+- **priv_key**: Specifies the file path to store the peer's private key. (default: "./.priv_key")
+
 ## Usage
 ### Running a Bootstrap Node
 To start a bootstrap node, run the following command:
@@ -55,13 +57,18 @@ To start a bootstrap node, run the following command:
 ### Connecting to the Bootstrap Node
 Once the bootstrap node is running, you can connect to it using the same binary with additional flags:
 ```bash
-./p2p -listen /ip4/<your_ip>/tcp/<node_port> -rendezvous test -grpcport <grpc_port> -gitport <git_daemon_port> -repos_dir <repos_dir_path>  -peer <bootstrap_address>
+./p2p -listen /ip4/<your_ip>/tcp/<node_port> -rendezvous test -grpcport <grpc_port> -gitport <git_daemon_port>  -priv_key <private_key_path> -repos_dir <repos_dir_path>  -peer <bootstrap_address>
 ```
 Replace placeholders <your_ip>, <node_port>, <grpc_port>, <git_daemon_port>, <repos_dir_path>, and <bootstrap_address> with appropriate values.
 
 For example:
 ```bash
-./p2p -listen /ip4/172.20.10.12/tcp/6667 -rendezvous test -grpcport 3000 -gitport 3001 -repos_dir repos1 -peer /ip4/172.20.10.12/tcp/6666/p2p/12D3KooWKV9yGUYG5KBwmj5hge332gYzKhwaJ9RjBJX2HE86zYVt
+./p2p -listen /ip4/172.20.10.12/tcp/6667 -rendezvous test -grpcport 3000 -gitport 3001  -priv_key ./.priv_key -repos_dir repos1 -peer /ip4/172.20.10.12/tcp/6666/p2p/12D3KooWKV9yGUYG5KBwmj5hge332gYzKhwaJ9RjBJX2HE86zYVt
 ```
+
+### Running a Git Init Operation (This is just for testing, it will be moved to the CLI)
+1. Change line 18 in `cmd/client/client.go` with the address of your peer's gRPC server.
+2. Change line 19 in `cmd/client/client.go` to your desired repository name.
+
 
 
