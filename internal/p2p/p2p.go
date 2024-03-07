@@ -2,9 +2,11 @@ package p2p
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"time"
 
 	constants "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
@@ -15,6 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	record "github.com/libp2p/go-libp2p-record"
+	crypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -37,7 +40,12 @@ func Initialize(config flags.Config) (*Peer, error) {
 	log.SetLogLevel("p2p", "info")
 	ctx := context.Background()
 
-	host, err := libp2p.New(libp2p.ListenAddrs(config.ListenAddresses...))
+	priv, err := RetrievePrivateKey(constants.PeerPrivateKeyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	host, err := libp2p.New(libp2p.ListenAddrs(config.ListenAddresses...), libp2p.Identity(priv))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create host: %w", err)
 	}
@@ -187,6 +195,47 @@ func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDisco
 			time.Sleep(10 * time.Second)
 		}
 	}()
+}
+
+func RetrievePrivateKey(privKeyPath string) (crypto.PrivKey, error) {
+	if _, err := os.Stat(privKeyPath); os.IsNotExist(err) {
+		priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			logger.Error("Failed for generate private key")
+			return nil, err
+		}
+
+		bytes, err := crypto.MarshalPrivateKey(priv)
+		if err != nil {
+			logger.Error("Failed to marshal private key: ", err)
+			return nil, err
+		}
+
+		err = ioutil.WriteFile(privKeyPath, bytes, os.ModePerm)
+		if err != nil {
+			logger.Error("Failed to write private key to file: ", err)
+			return nil, err
+		}
+
+		logger.Info("Generated and saved a new private key")
+		return priv, nil
+
+	} else {
+		bytes, err := ioutil.ReadFile(privKeyPath)
+		if err != nil {
+			logger.Error("Failed to read private key from file: ", err)
+			return nil, err
+		}
+
+		priv, err := crypto.UnmarshalPrivateKey(bytes)
+		if err != nil {
+			logger.Error("Failed to unmarshal private key: ", err)
+			return nil, err
+		}
+
+		logger.Info("Loaded private key from file")
+		return priv, nil
+	}
 }
 
 func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
