@@ -6,6 +6,7 @@ import (
 	"flag"
 	"strings"
 
+	constansts "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
 	maddr "github.com/multiformats/go-multiaddr"
 )
 
@@ -42,6 +43,7 @@ func StringsToAddrs(addrStrings []string) (maddrs []maddr.Multiaddr, err error) 
 type Config struct {
 	RendezvousString string
 	ReposDirectory   string
+	PrivateKeyFile   string
 	BootstrapPeers   AddrList
 	ListenAddresses  AddrList
 	IsBootstrap      bool
@@ -58,6 +60,7 @@ func ParseFlags() (Config, error) {
 	flag.IntVar(&config.GrpcPort, "grpcport", 0, "The Grpc server port")
 	flag.IntVar(&config.GitDaemonPort, "gitport", 0, "The port for the git daemon")
 	flag.StringVar(&config.ReposDirectory, "repos_dir", "./repos", "Directory to serve git repos from")
+	flag.StringVar(&config.PrivateKeyFile, "priv_key", constansts.PeerPrivateKeyPath, "File to store the peer's private key")
 	flag.Parse()
 
 	return config, nil
