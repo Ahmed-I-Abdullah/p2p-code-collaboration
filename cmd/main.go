@@ -27,12 +27,14 @@ func main() {
 		return
 	}
 
-	err = database.Init(config.GrpcPort)
-	if err != nil {
-		return
-	}
+	if !config.IsBootstrap {
+		err = database.Init(config.GrpcPort)
+		if err != nil {
+			return
+		}
 
-	defer database.Close()
+		defer database.Close()
+	}
 
 	if config.GrpcPort == 0 && !config.IsBootstrap {
 		logger.Fatalf("Please provide a Grpc server port using the grpcport flag")
