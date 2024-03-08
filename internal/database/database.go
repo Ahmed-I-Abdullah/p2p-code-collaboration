@@ -11,7 +11,7 @@ var logger = log.Logger("database")
 var DBCon *badger.DB
 
 func Init(id int) error {
-	err := log.SetLogLevel("database", "info")
+	err := log.SetLogLevel("database", "debug")
 	if err != nil {
 		logger.Error("could not set log level for the db logger")
 	}
@@ -42,7 +42,7 @@ func Get(key []byte) ([]byte, error) {
 		}
 		valCpy, err = item.ValueCopy(nil)
 		if err != nil {
-			logger.Errorf("could not copy value for key %v, error: %v", key, err)
+			logger.Errorf("could not copy value for key %s, error: %v", key, err)
 			return err
 		}
 		return nil
@@ -57,6 +57,6 @@ func Put(key []byte, val []byte) error {
 		updateErr := txn.SetEntry(entry)
 		return updateErr
 	})
-	logger.Debugf("successfully wrote key -> %v , pair -> %s to the database", key, val)
+	logger.Debugf("successfully wrote key -> %s , pair -> %s to the database", key, val)
 	return err
 }

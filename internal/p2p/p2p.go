@@ -39,7 +39,7 @@ type Peer struct {
 }
 
 func Initialize(config flags.Config) (*Peer, error) {
-	log.SetLogLevel("p2p", "info")
+	log.SetLogLevel("p2p", "debug")
 	ctx := context.Background()
 
 	priv, err := RetrievePrivateKey(config.PrivateKeyFile)
@@ -204,7 +204,7 @@ func (p *Peer) connectToPeers(ctx context.Context, routingDiscovery *drouting.Ro
 							if err != nil {
 								logger.Errorf("failed to write ports to db for peer %v : %v", foundPeer.ID, err)
 							}
-							logger.Infof("port info for peer %v has been saved")
+							logger.Infof("port info for peer %v has been saved", foundPeer.ID)
 						}
 					} else if err != nil {
 						logger.Errorf("could not retrive ports for %v from db. Err -> %v", foundPeer.ID, err)
