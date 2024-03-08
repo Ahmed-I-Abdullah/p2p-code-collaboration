@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
-	"github.com/dgraph-io/badger/v4"
 	"os"
 
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api"
@@ -28,14 +27,12 @@ func main() {
 		return
 	}
 
-	var dbErr error = nil
-	database.DBCon, dbErr = badger.Open(badger.DefaultOptions(fmt.Sprintf("/tmp/badger/%v", config.GrpcPort)))
-
-	if dbErr != nil {
-		logger.Fatalf("Error connecting to DB: %v", dbErr)
+	err = database.Init(config.GrpcPort)
+	if err != nil {
 		return
 	}
-	defer database.DBCon.Close()
+
+	defer database.Close()
 
 	if config.GrpcPort == 0 && !config.IsBootstrap {
 		logger.Fatalf("Please provide a Grpc server port using the grpcport flag")

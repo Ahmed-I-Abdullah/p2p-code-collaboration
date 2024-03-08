@@ -191,32 +191,26 @@ func (p *Peer) connectToPeers(ctx context.Context, routingDiscovery *drouting.Ro
 				if err != nil {
 					logger.Errorf("failed to connect to peer %s: %v", foundPeer.ID, err)
 				} else {
-
-					err := database.DBCon.Update(func(txn *badger.Txn) error {
-						item, err := txn.Get([]byte(foundPeer.ID))
-						if err == nil {
-							item.Value(func(val []byte) error {
-								logger.Debugf(" entry for peerID %v already exists. Here is the data: %s", foundPeer.ID, val)
-								return nil
-							})
-							return nil
-						}
-						if !errors.Is(err, badger.ErrKeyNotFound) {
-							logger.Errorf(" could not get database information: %v", err)
-							return err
-						}
-						peerInfo, err := p.GetPeerPorts(foundPeer.ID)
-						value, err := json.Marshal(peerInfo)
-						if err != nil {
-							logger.Fatalf("failed to marshal peer info")
-						}
-						updateErr := txn.Set([]byte(foundPeer.ID), value)
-						return updateErr
-					})
-					if err != nil {
-						logger.Error(err)
-					}
 					logger.Infof("Connected to peer: %s", foundPeer.ID)
+
+					ports, err := database.Get([]byte(foundPeer.ID))
+
+					if errors.Is(err, badger.ErrKeyNotFound) {
+						infoBytes, err := p.getPeerPortsRaw(foundPeer.ID)
+						if err != nil {
+							logger.Errorf("failed to get ports for peer %v : %v", foundPeer.ID, err)
+						} else {
+							err = database.Put([]byte(foundPeer.ID), infoBytes)
+							if err != nil {
+								logger.Errorf("failed to write ports to db for peer %v : %v", foundPeer.ID, err)
+							}
+							logger.Infof("port info for peer %v has been saved")
+						}
+					} else if err != nil {
+						logger.Errorf("could not retrive ports for %v from db. Err -> %v", foundPeer.ID, err)
+					} else {
+						logger.Debugf(" entry for peerID %v already exists. Here is the data: %s", foundPeer.ID, ports)
+					}
 				}
 			}
 
@@ -266,7 +260,7 @@ func RetrievePrivateKey(privKeyPath string) (crypto.PrivKey, error) {
 	}
 }
 
-func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
+func (p *Peer) getPeerPortsRaw(peerID peer.ID) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -293,6 +287,19 @@ func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
 
 	logger.Infof("Info bytes read: %s", infoBytes)
 
+	return infoBytes, nil
+}
+
+// GetPeerPortsDirectly gets peer ports directly from peer and saves it to the database
+func (p *Peer) GetPeerPortsDirectly(peerID peer.ID) (*PeerInfo, error) {
+	infoBytes, err := p.getPeerPortsRaw(peerID)
+	if err != nil {
+		return nil, err
+	}
+	err = database.Put([]byte(peerID), infoBytes)
+	if err != nil {
+		logger.Warnf("Could not save peer ports with id %v to the database")
+	}
 	var info PeerInfo
 	logger.Infof("Unmarshaling peer info...")
 	err = json.Unmarshal(infoBytes, &info)
@@ -308,24 +315,16 @@ func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
 }
 
 func (p *Peer) GetPeerPortsFromDB(peerID peer.ID) (*PeerInfo, error) {
-	var valCpy []byte
-	err := database.DBCon.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(peerID))
-		if err != nil {
-			return err
-		}
-		valCpy, err = item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
+	val, err := database.Get([]byte(peerID))
+	if errors.Is(err, badger.ErrKeyNotFound) {
+		return p.GetPeerPortsDirectly(peerID)
+	}
 	if err != nil {
 		logger.Errorf("could not get key %v : %v", peerID, err)
 		return nil, err
 	}
 	var info PeerInfo
-	err = json.Unmarshal(valCpy, &info)
+	err = json.Unmarshal(val, &info)
 	if err != nil {
 		logger.Errorf("Error unmarshaling peer info: %v", err)
 		return nil, fmt.Errorf("Error unmarshaling peer info: %w", err)
