@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"os"
 
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api"
@@ -24,6 +25,15 @@ func main() {
 	if err != nil {
 		logger.Errorf("Error parsing flags: %v", err)
 		return
+	}
+
+	if !config.IsBootstrap {
+		err = database.Init(config.GrpcPort)
+		if err != nil {
+			return
+		}
+
+		defer database.Close()
 	}
 
 	if config.GrpcPort == 0 && !config.IsBootstrap {

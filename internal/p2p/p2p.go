@@ -4,14 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/dgraph-io/badger/v4"
 	"io/ioutil"
 	"os"
 	"time"
 
 	constants "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
-
 	"github.com/ipfs/boxo/ipns"
 	"github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
@@ -37,7 +39,7 @@ type Peer struct {
 }
 
 func Initialize(config flags.Config) (*Peer, error) {
-	log.SetLogLevel("p2p", "info")
+	log.SetLogLevel("p2p", "debug")
 	ctx := context.Background()
 
 	priv, err := RetrievePrivateKey(config.PrivateKeyFile)
@@ -104,8 +106,6 @@ func Initialize(config flags.Config) (*Peer, error) {
 	dutil.Advertise(ctx, routingDiscovery, config.RendezvousString)
 	logger.Info("Successfully announced!")
 
-	connectToPeers(ctx, routingDiscovery, host, config.RendezvousString)
-
 	peer := &Peer{
 		Host:             host,
 		DHT:              kademliaDHT,
@@ -114,6 +114,8 @@ func Initialize(config flags.Config) (*Peer, error) {
 		GitDaemonPort:    config.GitDaemonPort,
 		BootstrapPeers:   config.BootstrapPeers,
 	}
+
+	peer.connectToPeers(ctx, routingDiscovery, host, config.RendezvousString)
 
 	return peer, nil
 }
@@ -168,7 +170,8 @@ func handlePeerInfoStream(s network.Stream, grpcPort, gitDaemonPort int) {
 // 	}()
 // }
 
-func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
+func (p *Peer) connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
+
 	go func() {
 		logger.Info("Searching for other peers...")
 		for {
@@ -189,6 +192,25 @@ func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDisco
 					logger.Errorf("failed to connect to peer %s: %v", foundPeer.ID, err)
 				} else {
 					logger.Infof("Connected to peer: %s", foundPeer.ID)
+
+					ports, err := database.Get([]byte(foundPeer.ID))
+
+					if errors.Is(err, badger.ErrKeyNotFound) {
+						infoBytes, err := p.getPeerPortsRaw(foundPeer.ID)
+						if err != nil {
+							logger.Errorf("failed to get ports for peer %v : %v", foundPeer.ID, err)
+						} else {
+							err = database.Put([]byte(foundPeer.ID), infoBytes)
+							if err != nil {
+								logger.Errorf("failed to write ports to db for peer %v : %v", foundPeer.ID, err)
+							}
+							logger.Infof("port info for peer %v has been saved", foundPeer.ID)
+						}
+					} else if err != nil {
+						logger.Errorf("could not retrive ports for %v from db. Err -> %v", foundPeer.ID, err)
+					} else {
+						logger.Debugf(" entry for peerID %v already exists. Here is the data: %s", foundPeer.ID, ports)
+					}
 				}
 			}
 
@@ -238,7 +260,7 @@ func RetrievePrivateKey(privKeyPath string) (crypto.PrivKey, error) {
 	}
 }
 
-func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
+func (p *Peer) getPeerPortsRaw(peerID peer.ID) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -265,6 +287,19 @@ func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
 
 	logger.Infof("Info bytes read: %s", infoBytes)
 
+	return infoBytes, nil
+}
+
+// GetPeerPortsDirectly gets peer ports directly from peer and saves it to the database
+func (p *Peer) GetPeerPortsDirectly(peerID peer.ID) (*PeerInfo, error) {
+	infoBytes, err := p.getPeerPortsRaw(peerID)
+	if err != nil {
+		return nil, err
+	}
+	err = database.Put([]byte(peerID), infoBytes)
+	if err != nil {
+		logger.Warnf("Could not save peer ports with id %v to the database")
+	}
 	var info PeerInfo
 	logger.Infof("Unmarshaling peer info...")
 	err = json.Unmarshal(infoBytes, &info)
@@ -276,6 +311,24 @@ func (p *Peer) GetPeerPorts(peerID peer.ID) (*PeerInfo, error) {
 
 	logger.Infof("Peer %s is listening on gRPC port %s and git Daemon port %s", peerID.Pretty(), info.GrpcPort, info.GitDaemonPort)
 
+	return &info, nil
+}
+
+func (p *Peer) GetPeerPortsFromDB(peerID peer.ID) (*PeerInfo, error) {
+	val, err := database.Get([]byte(peerID))
+	if errors.Is(err, badger.ErrKeyNotFound) {
+		return p.GetPeerPortsDirectly(peerID)
+	}
+	if err != nil {
+		logger.Errorf("could not get key %v : %v", peerID, err)
+		return nil, err
+	}
+	var info PeerInfo
+	err = json.Unmarshal(val, &info)
+	if err != nil {
+		logger.Errorf("Error unmarshaling peer info: %v", err)
+		return nil, fmt.Errorf("Error unmarshaling peer info: %w", err)
+	}
 	return &info, nil
 }
 
