@@ -7,9 +7,6 @@ This application is a peer-to-peer (P2P) networking implementation using Go and 
 ### Prerequisites
 
 - Go (I am using version 1.20)
-- Badger DB (info can be found here: https://dgraph.io/docs/badger/get-started/)
-  - `go get github.com/dgraph-io/badger/v4` (retrieve the library)
-  - `go install github.com/dgraph-io/badger/v4/badger@latest` (install the badger command line utility into your $GOBIN path)
 
 ### Clone the Repository
 ```bash

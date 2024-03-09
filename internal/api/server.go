@@ -167,7 +167,7 @@ func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p pee
 	target := fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
 
 	logger.Infof("Connecting to peer %s at address %s for gRPC communication\n", p, target)
-	conn, err := grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(time.Second*10))
 	if err != nil {
 		// there is a chance that the peer port is wrong and needs to be stored again. In this case we retry peer
 		// retrieval by contacting the peer directly
@@ -178,7 +178,7 @@ func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p pee
 		}
 		target = fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
 		logger.Warnf("Connecting to peer %s at address %s for gRPC communication the second time\n", p, target)
-		conn, err = grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock())
+		conn, err = grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(time.Second*10))
 		if err != nil {
 			return false, fmt.Errorf("failed to connect: %w", err)
 		}

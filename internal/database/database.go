@@ -42,11 +42,15 @@ func Get(key []byte) ([]byte, error) {
 		}
 		valCpy, err = item.ValueCopy(nil)
 		if err != nil {
-			logger.Errorf("could not copy value for key %s, error: %v", key, err)
+			logger.Errorf("could not copy value for key %v, error: %v", key, err)
 			return err
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Debugf("value returned for key %v : %s", key, valCpy)
 	return valCpy, err
 }
 
@@ -57,6 +61,6 @@ func Put(key []byte, val []byte) error {
 		updateErr := txn.SetEntry(entry)
 		return updateErr
 	})
-	logger.Debugf("successfully wrote key -> %s , pair -> %s to the database", key, val)
+	logger.Debugf("successfully wrote key -> %v , pair -> %s to the database", key, val)
 	return err
 }
