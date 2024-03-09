@@ -138,6 +138,12 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 }
 
 func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p peer.ID, repoName string) (bool, error) {
+	// there is a chance that the peer port is wrong and needs to be stored again. In this case we retry peer
+	// retrieval by contacting the peer directly
+	return s.signalCreateNewRepositoryRecursive(ctx, p, repoName, false)
+}
+
+func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Context, p peer.ID, repoName string, secondAttempt bool) (bool, error) {
 	if p == s.Peer.Host.ID() {
 		logger.Info("Initializing repository on current host")
 		_, err := s.Init(ctx, &pb.RepoInitRequest{Name: repoName, FromCli: false})
@@ -154,7 +160,13 @@ func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p pee
 	}
 	peerAddress := peerAddresses[0]
 
-	peerPorts, err := s.Peer.GetPeerPortsFromDB(p)
+	var peerPorts *p2p.PeerInfo
+	var err error
+	if !secondAttempt {
+		peerPorts, err = s.Peer.GetPeerPortsFromDB(p)
+	} else {
+		peerPorts, err = s.Peer.GetPeerPortsDirectly(p)
+	}
 	if err != nil {
 		return false, fmt.Errorf("failed to get peer ports: %w", err)
 	}
@@ -167,21 +179,17 @@ func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p pee
 	target := fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
 
 	logger.Infof("Connecting to peer %s at address %s for gRPC communication\n", p, target)
-	conn, err := grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(time.Second*10))
+
+	grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer grpcCancel()
+
+	conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		// there is a chance that the peer port is wrong and needs to be stored again. In this case we retry peer
-		// retrieval by contacting the peer directly
-		logger.Warn("failed to connect to peer. Will attempt once more by grabbing Peer ports directly!")
-		peerPorts, err = s.Peer.GetPeerPortsDirectly(p)
-		if err != nil {
+		if secondAttempt {
 			return false, fmt.Errorf("failed to get peer ports: %w", err)
 		}
-		target = fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
-		logger.Warnf("Connecting to peer %s at address %s for gRPC communication the second time\n", p, target)
-		conn, err = grpc.Dial(target, grpc.WithInsecure(), grpc.WithBlock(), grpc.WithTimeout(time.Second*10))
-		if err != nil {
-			return false, fmt.Errorf("failed to connect: %w", err)
-		}
+		logger.Warnf("failed to connect to peer %s at address %s. Will attempt once more by grabbing Peer ports directly!", p, target)
+		return s.signalCreateNewRepositoryRecursive(ctx, p, repoName, true)
 	}
 	defer conn.Close()
 
