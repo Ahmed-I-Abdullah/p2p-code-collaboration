@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dgraph-io/badger/v4"
 	"io/ioutil"
 	"os"
 	"time"
+
+	"github.com/dgraph-io/badger/v4"
 
 	constants "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
@@ -143,32 +144,6 @@ func handlePeerInfoStream(s network.Stream, grpcPort, gitDaemonPort int) {
 	logger.Infof("Peer info sent successfully")
 	s.Close()
 }
-
-// func connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
-// 	go func() {
-// 		logger.Info("Searching for other peers...")
-
-// 		peerChan, err := routingDiscovery.FindPeers(ctx, rendezvous)
-// 		if err != nil {
-// 			logger.Errorf("failed to find peers: %v", err)
-// 			return
-// 		}
-
-// 		for foundPeer := range peerChan {
-// 			// Skip the peer if it is the host itself.
-// 			if foundPeer.ID == host.ID() {
-// 				continue
-// 			}
-
-// 			err := host.Connect(ctx, foundPeer)
-// 			if err != nil {
-// 				logger.Errorf("failed to connect to peer %s: %v", foundPeer.ID, err)
-// 			} else {
-// 				logger.Infof("Connected to peer: %s", foundPeer.ID)
-// 			}
-// 		}
-// 	}()
-// }
 
 func (p *Peer) connectToPeers(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, host host.Host, rendezvous string) {
 
