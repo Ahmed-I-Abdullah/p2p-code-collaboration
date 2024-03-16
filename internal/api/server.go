@@ -34,7 +34,6 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 	logger.Info("Received request to initialize a repository")
 
 	if req.FromCli {
-		// Initial process remains the same
 		existingRepository, err := s.Peer.DHT.GetValue(ctx, getDHTPathFromRepoName(req.Name))
 
 		if err != routing.ErrNotFound && err != nil {
@@ -73,32 +72,40 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 		}
 
 		successfulPeers := make([]peer.ID, 0)
+		failedPeers := make([]peer.ID, 0)
 		var errs []error
 
 		for len(successfulPeers) < replicationFactor && len(onlinePeers) > 0 {
-			p := onlinePeers[0] // choose a peer
+			p := onlinePeers[0]
 			success, err := s.signalCreateNewRepository(ctx, p, req.Name)
 
 			if success {
 				successfulPeers = append(successfulPeers, p)
-			} else {
+			} else if len(failedPeers) < replicationFactor {
+				failedPeers = append(failedPeers, p)
 				errs = append(errs, fmt.Errorf("failed processing peer %v: %w", p, err))
 			}
-
-			// Regardless of success or failure, we remove the peer from the slice
 			onlinePeers = onlinePeers[1:]
 		}
 
-		if len(successfulPeers) < replicationFactor {
+		// If no one peer succeeded, we return an error
+		if len(successfulPeers) == 0 {
 			return &pb.RepoInitResponse{
 				Success: false,
-				Message: fmt.Sprintf("Could not create repo on all %v peers, created on %v peers. Errors: %v", replicationFactor, len(successfulPeers), multierr.Combine(errs...)),
-			}, fmt.Errorf("Could not create repo on all %v peers, created on %v peers. Errors: %w", replicationFactor, len(successfulPeers), multierr.Combine(errs...))
+				Message: fmt.Sprintf("Could not create repo on all %v peers. Errors: %v", replicationFactor, multierr.Combine(errs...)),
+			}, fmt.Errorf("Could not create repo on all %v peers. Errors: %w", replicationFactor, len(successfulPeers), multierr.Combine(errs...))
+		}
+
+		// If not enough peers succeed, we use some failed peers but don't include them in the ISR list
+		repoPeers := successfulPeers
+		if len(successfulPeers) < replicationFactor {
+			remainingPeers := replicationFactor - len(successfulPeers)
+			repoPeers = append(successfulPeers, failedPeers[:remainingPeers]...)
 		}
 
 		repo := p2p.RepositoryPeers{
-			PeerIDs:        successfulPeers,
-			InSyncReplicas: nil, // TODO: Fix this later
+			PeerIDs:        repoPeers,
+			InSyncReplicas: successfulPeers,
 			Version:        1,
 		}
 
