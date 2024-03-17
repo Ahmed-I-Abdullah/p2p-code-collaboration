@@ -209,6 +209,13 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 	return true, nil
 }
 
+func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
+	return &pb.RepoPullResponse{
+		Success:     true,
+		RepoAddress: "",
+	}, nil
+}
+
 func (s *RepositoryService) storeRepoInDHT(ctx context.Context, key string, repo p2p.RepositoryPeers) error {
 	repoBytes, err := json.Marshal(repo)
 	if err != nil {
