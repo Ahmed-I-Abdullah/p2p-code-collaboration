@@ -217,10 +217,50 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 }
 
 func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
+	repo, err := s.getRepoInDHT(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < len(repo.InSyncReplicas); i++ {
+		var replica = repo.InSyncReplicas[i]
+		if replica == s.Peer.Host.ID() {
+			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
+			return &pb.RepoPullResponse{
+				Success:     true,
+				RepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
+			}, nil
+		}
+		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
+		peerAddress := peerAddresses[0]
+		ipAddress, err := extractIPAddr(peerAddress.String())
+		if err != nil {
+			continue
+		}
+		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
+		if err != nil {
+			logger.Warnf("failed to get peer ports for peer: %s", replica)
+			continue
+		}
+		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer grpcCancel()
+		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
+		conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
+		if err != nil {
+			logger.Warnf("failed to connect to peer: %s", target)
+			continue
+		}
+		conn.Close()
+
+		return &pb.RepoPullResponse{
+			Success:     true,
+			RepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
+		}, nil
+
+	}
 	return &pb.RepoPullResponse{
-		Success:     true,
+		Success:     false,
 		RepoAddress: "",
-	}, nil
+	}, fmt.Errorf("failed to get git address for any insync relplica")
 }
 
 func (s *RepositoryService) storeRepoInDHT(ctx context.Context, key string, repo p2p.RepositoryPeers) error {
@@ -233,6 +273,19 @@ func (s *RepositoryService) storeRepoInDHT(ctx context.Context, key string, repo
 		return fmt.Errorf("failed to store repository peers data in DHT: %w", err)
 	}
 	return nil
+}
+
+func (s *RepositoryService) getRepoInDHT(ctx context.Context, key string) (*p2p.RepositoryPeers, error) {
+	repoBytes, err := s.Peer.DHT.GetValue(ctx, getDHTPathFromRepoName(key))
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize repository peers data: %w", err)
+	}
+	var repo p2p.RepositoryPeers
+	err = json.Unmarshal(repoBytes, &repo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve repository peers data in DHT: %w", err)
+	}
+	return &repo, nil
 }
 
 func extractIPAddr(address string) (string, error) {
