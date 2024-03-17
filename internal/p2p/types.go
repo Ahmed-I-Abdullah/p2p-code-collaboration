@@ -9,6 +9,6 @@ type PeerInfo struct {
 
 type RepositoryPeers struct {
 	PeerIDs        []peer.ID `json:"peerIDs"`
-	InSyncReplicas []string  `json:"inSyncReplicas"`
+	InSyncReplicas []peer.ID `json:"inSyncReplicas"`
 	Version        int       `json:"version"`
 }
