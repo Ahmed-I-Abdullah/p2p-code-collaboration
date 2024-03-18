@@ -10,7 +10,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api/pb"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/pb"
 )
 
 const (
