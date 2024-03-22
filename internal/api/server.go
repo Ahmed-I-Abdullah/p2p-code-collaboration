@@ -229,8 +229,51 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	
 	// Update the version if needed
 	repo.Version++
+	
+	address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
+	if err := s.PullFromAllPeers(ctx, fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name)); err != nil {
+		return &pb.NotifyPushCompletionResponse{
+			Success: false,
+			Message: "Failed to notify changes to other repos",
+		}, err
+	}
 
-	return &pb.NotifyPushCompletionResponse{Success: true}, nil
+	return &pb.NotifyPushCompletionResponse{
+		Success: true,
+		Message: "Peers have successfully notified about the push change",
+	}, nil
+}
+
+func (s *RepositoryService) PullFromAllPeers(ctx context.Context, url string) (bool, error) {
+	allPeers := s.Peer.GetPeers()
+	isSuccessfull := false
+
+	for i := 0; i < len(allPeers); i++ {
+		var currPeer = allPeers[i]
+		//cd to repo directory
+		args := []string{"cd"}
+		args = append(args, s.Git.reposDir)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			//try pulling from the current peerx
+			args := []string{"pull"}
+			args = append(args, url)
+			cmd := exec.Command("git", args...)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+	
+			if err := cmd.Run(); err != nil {
+				repo.InSyncReplicas = append(repo.InSyncReplicas, currPeer)
+				isSuccessfull = true
+			}
+		}
+	}
+	if isSuccessfull {
+		return true, nil
+	} else {
+		return false, fmt.Errorf("Failed to notify changes to other repos")
+	}
 }
 
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
@@ -255,7 +298,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 				Success:     true,
 				Name: req.Name,
 				RepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
-				GrpcPort: s.Peer.GrpcPort,
+				GrpcPort: fmt.Sprintf("%s:%s", address, s.Peer.GrpcPort),
 			}, nil
 		}
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
@@ -283,7 +326,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 			Success: true,
 			Name: req.Name,
 			RepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
-			GrpcPort: peerInfo.GrpcPort,
+			GrpcPort: fmt.Sprintf("%s:%s", address, peerInfo.GrpcPort),
 		}, nil
 
 	}
