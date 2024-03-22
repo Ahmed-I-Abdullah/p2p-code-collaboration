@@ -6,7 +6,7 @@ option go_package = "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/pb";
 service Repository {
     rpc Init(RepoInitRequest) returns (RepoInitResponse);
     rpc Pull(RepoPullRequest) returns (RepoPullResponse);
-    rpc Push(RepoPushRequest) returns (RepoPushResponse);
+    rpc GetLeaderUrl(LeaderUrlRequest) returns (LeaderUrlResponse);
 }
 
 message RepoInitRequest {
@@ -35,4 +35,23 @@ message RepoPushRequest {
 message RepoPushResponse {
     bool success = 1;
     string message = 2;
+}
+
+message LeaderUrlRequest {
+    string name = 1;
+}
+
+message LeaderUrlResponse {
+    string success = 1;
+    string name = 2;
+    string gitRepoAddress = 3;
+    string grpcPort = 4;
+}
+
+message NotifyPushCompletionRequest {
+    string name = 1;
+}
+
+message NotifyPushCompletionResponse {
+    bool success = 1;
 }

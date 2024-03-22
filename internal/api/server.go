@@ -216,83 +216,83 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 	return true, nil
 }
 
-func (s *RepositoryService) Push(ctx context.Context, req *pb.RepoPushRequest) (*pb.RepoPushResponse, error) {
-	log.SetLogLevel("grpcService", "info")
-	logger.Info("Received request to push changes")
-	// Get the Repo from the DHT
+func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.NotifyPushCompletionRequest) (*pb.NotifyPushCompletionResponse, error) {
 	repo, err := s.getRepoInDHT(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
+	// Clear the inSyncReplicas
+	repo.InSyncReplicas = make([]peer.ID, 0)
 
-	// Check if the pushing peer is a contributor to the repository
-	isContributor := false
-	for _, replicaID := range repo.PeerIDs {
-			if replicaID == s.Peer.Host.ID() {
-				isContributor = true
-					break
-			}
+	// Add the current peer (Leader) ID to inSyncReplicas
+	repo.InSyncReplicas = append(repo.InSyncReplicas, s.Peer.Host.ID())
+	
+	// Update the version if needed
+	repo.Version++
+
+	return &pb.NotifyPushCompletionResponse{Success: true}, nil
+}
+
+func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
+	repo, err := s.getRepoInDHT(ctx, req.Name)
+	if err != nil {
+		return nil, err
 	}
+	// Make a copy of InSyncReplicas
+	sortedReplicas := make([]string, len(repo.InSyncReplicas))
+	copy(sortedReplicas, repo.InSyncReplicas)
 
-	if !isContributor {
-		return nil, fmt.Errorf("Peer doesn't have access to push to this repository")
-	}
+	// Sort the copy in descending order
+	sort.Slice(sortedReplicas, func(i, j int) bool {
+		return sortedReplicas[i] > sortedReplicas[j]
+	})
 
-	// Iterate through in-sync replicas and push changes to each of them
-	for _, replica := range repo.InSyncReplicas {
+	for i := 0; i < len(sortedReplicas); i++ {
+		var replica = repo.InSyncReplicas[i]
 		if replica == s.Peer.Host.ID() {
-				continue
+			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
+			return &pb.LeaderUrlResponse{
+				Success:     true,
+				Name: req.Name,
+				RepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
+				GrpcPort: s.Peer.GrpcPort,
+			}, nil
 		}
-
-		// Get the peer's IP address and ports from the database
+		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
+		peerAddress := peerAddresses[0]
+		ipAddress, err := extractIPAddr(peerAddress.String())
+		if err != nil {
+			continue
+		}
 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
 		if err != nil {
-				logger.Warnf("failed to get peer ports for peer: %s", replica)
-				continue
+			logger.Warnf("failed to get peer ports for peer: %s", replica)
+			continue
 		}
-		
 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer grpcCancel()
-
-		// Construct target address for gRPC connection
-		target := fmt.Sprintf("%s:%d", peerInfo.IPAddress, peerInfo.GrpcPort)
-
-		// Establish a gRPC connection to the peer
-		conn, err := grpc.DialContext(ctx, target, grpc.WithInsecure(), grpc.WithBlock())
+		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
+		conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
 		if err != nil {
-				logger.Warnf("failed to connect to peer: %s", target)
-				continue
+			logger.Warnf("failed to connect to peer: %s", target)
+			continue
 		}
 		conn.Close()
 
-		//Amino etsaref, ana mesh fahem 7aga mn hena, el mafrood 23mel eh????
-	
-		// Send the push request to the peer
-		
-		// pushCtx, pushCancel := context.WithTimeout(ctx, time.Second*5)
-		// defer pushCancel()
-		// _, err = client.Push(pushCtx, &pb.PushRequest{
-		// 		RepoName: req.Name,
-		// 		// Add any necessary payload for the push request, like file changes or commits
-		// })
-
-		//Update repo in dht
-
-		// updatedRepo := *repo
-    // updatedRepo.Version++
-    // if err := s.storeRepoInDHT(ctx, req.Name, updatedRepo); err != nil {
-    //     return nil, fmt.Errorf("failed to update repository information in DHT: %v", err)
-    // }
-
-		return &pb.RepoPushResponse{
-			Success:     true
+		return &pb.LeaderUrlResponse{
+			Success: true,
+			Name: req.Name,
+			RepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
+			GrpcPort: peerInfo.GrpcPort,
 		}, nil
+
 	}
-
-	return &pb.RepoPushResponse{
-		Success:     false
+	return &pb.LeaderUrlResponse{
+		Success: false,
+		Name: req.Name,
+		RepoAddress: "",
+		GrpcPort: "",
 	}, fmt.Errorf("failed to get git address for any insync relplica")
-
 }
 
 func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
