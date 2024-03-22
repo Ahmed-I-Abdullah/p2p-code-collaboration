@@ -231,7 +231,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	repo.Version++
 	
 	address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
-	if err := s.PullFromAllPeers(ctx, fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name)); err != nil {
+	if err := s.PullFromAllPeers(ctx, fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name), repo); err != nil {
 		return &pb.NotifyPushCompletionResponse{
 			Success: false,
 			Message: "Failed to notify changes to other repos",
@@ -244,7 +244,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	}, nil
 }
 
-func (s *RepositoryService) PullFromAllPeers(ctx context.Context, url string) (bool, error) {
+func (s *RepositoryService) PullFromAllPeers(ctx context.Context, url string, repo *p2p.RepositoryPeers) (bool, error) {
 	allPeers := s.Peer.GetPeers()
 	isSuccessfull := false
 
