@@ -216,6 +216,85 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 	return true, nil
 }
 
+func (s *RepositoryService) Push(ctx context.Context, req *pb.RepoPushRequest) (*pb.RepoPushResponse, error) {
+	log.SetLogLevel("grpcService", "info")
+	logger.Info("Received request to push changes")
+	// Get the Repo from the DHT
+	repo, err := s.getRepoInDHT(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if the pushing peer is a contributor to the repository
+	isContributor := false
+	for _, replicaID := range repo.PeerIDs {
+			if replicaID == s.Peer.Host.ID() {
+				isContributor = true
+					break
+			}
+	}
+
+	if !isContributor {
+		return nil, fmt.Errorf("Peer doesn't have access to push to this repository")
+	}
+
+	// Iterate through in-sync replicas and push changes to each of them
+	for _, replica := range repo.InSyncReplicas {
+		if replica == s.Peer.Host.ID() {
+				continue
+		}
+
+		// Get the peer's IP address and ports from the database
+		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
+		if err != nil {
+				logger.Warnf("failed to get peer ports for peer: %s", replica)
+				continue
+		}
+		
+		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer grpcCancel()
+
+		// Construct target address for gRPC connection
+		target := fmt.Sprintf("%s:%d", peerInfo.IPAddress, peerInfo.GrpcPort)
+
+		// Establish a gRPC connection to the peer
+		conn, err := grpc.DialContext(ctx, target, grpc.WithInsecure(), grpc.WithBlock())
+		if err != nil {
+				logger.Warnf("failed to connect to peer: %s", target)
+				continue
+		}
+		conn.Close()
+
+		//Amino etsaref, ana mesh fahem 7aga mn hena, el mafrood 23mel eh????
+	
+		// Send the push request to the peer
+		
+		// pushCtx, pushCancel := context.WithTimeout(ctx, time.Second*5)
+		// defer pushCancel()
+		// _, err = client.Push(pushCtx, &pb.PushRequest{
+		// 		RepoName: req.Name,
+		// 		// Add any necessary payload for the push request, like file changes or commits
+		// })
+
+		//Update repo in dht
+
+		// updatedRepo := *repo
+    // updatedRepo.Version++
+    // if err := s.storeRepoInDHT(ctx, req.Name, updatedRepo); err != nil {
+    //     return nil, fmt.Errorf("failed to update repository information in DHT: %v", err)
+    // }
+
+		return &pb.RepoPushResponse{
+			Success:     true
+		}, nil
+	}
+
+	return &pb.RepoPushResponse{
+		Success:     false
+	}, fmt.Errorf("failed to get git address for any insync relplica")
+
+}
+
 func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
 	repo, err := s.getRepoInDHT(ctx, req.Name)
 	if err != nil {
