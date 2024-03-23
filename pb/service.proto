@@ -55,3 +55,8 @@ message NotifyPushCompletionRequest {
 message NotifyPushCompletionResponse {
     bool success = 1;
 }
+
+message RequestToPullRequest {
+    string name = 1;
+    string gitAddress = 2;
+}

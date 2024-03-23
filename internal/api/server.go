@@ -230,23 +230,73 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	// Update the version if needed
 	repo.Version++
 	
+	// Construct the git address
 	address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
-	if err := s.PullFromAllPeers(ctx, fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name), repo); err != nil {
-		return &pb.NotifyPushCompletionResponse{
-			Success: false,
-			Message: "Failed to notify changes to other repos",
-		}, err
+	gitAddress := fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name)
+
+	// Slice to keep track of successful peers
+	successfulPeers := make([]peer.ID, 0)
+
+	// Iterate over peers in repo.PeerIDs and make pull requests
+	for _, peerID := range repo.PeerIDs {
+		// Fetch peer information
+		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
+		peerAddress := peerAddresses[0]
+		ipAddress, err := extractIPAddr(peerAddress.String())
+		if err != nil {
+			continue
+		}
+		peerInfo, err := s.Peer.GetPeerPortsFromDB(peerID)
+		if err != nil {
+			logger.Warnf("failed to get peer ports for peer: %s", peerID)
+			continue
+		}
+
+		// Create gRPC client connection to the peer
+		grpcCtx, grpcCancel := context.WithTimeout(ctx, time.Second*5)
+		defer grpcCancel()
+		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
+		conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
+		if err != nil {
+			logger.Warnf("failed to connect to peer: %s", target)
+			continue
+		}
+		defer conn.Close()
+
+		// Make gRPC call to RequestToPull
+		client := pb.NewRepositoryClient(conn)
+		pullReq := &pb.RequestToPullRequest{
+			Name:   req.Name,
+			GitAddress: gitAddress,
+		}
+		_, err = client.RequestToPull(ctx, pullReq)
+		if err != nil {
+			logger.Warnf("failed to pull from peer: %s", peerID)
+			continue
+		}
+
+		// If pull request is successful, add peer to successful peers slice
+		successfulPeers = append(successfulPeers, peerID)
 	}
 
+	// Add successful peers to in-sync list if there are any
+	if len(successfulPeers) > 0 {
+			repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
+	} else {
+			// If there are no successful peers, return failure response
+			return &pb.NotifyPushCompletionResponse{
+					Success: false,
+					Message: "No peers were successfully notified about the push change",
+			}, nil
+	}
 	return &pb.NotifyPushCompletionResponse{
 		Success: true,
 		Message: "Peers have successfully notified about the push change",
 	}, nil
 }
 
-func (s *RepositoryService) PullFromAllPeers(ctx context.Context, url string, repo *p2p.RepositoryPeers) (bool, error) {
+func (s *RepositoryService) RequestToPull(ctx context.Context, req *pb.RequestToPullRequest) (bool, error) {
 	allPeers := s.Peer.GetPeers()
-	isSuccessfull := false
 
 	for i := 0; i < len(allPeers); i++ {
 		var currPeer = allPeers[i]
@@ -258,21 +308,17 @@ func (s *RepositoryService) PullFromAllPeers(ctx context.Context, url string, re
 		if err := cmd.Run(); err != nil {
 			//try pulling from the current peerx
 			args := []string{"pull"}
-			args = append(args, url)
+			args = append(args, req.GitAddress)
 			cmd := exec.Command("git", args...)
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 	
 			if err := cmd.Run(); err != nil {
-				repo.InSyncReplicas = append(repo.InSyncReplicas, currPeer)
-				isSuccessfull = true
-			}
+				return true, nil
+			} else {
+				return false, fmt.Errorf("Failed to pull latest changes")
+			} 
 		}
-	}
-	if isSuccessfull {
-		return true, nil
-	} else {
-		return false, fmt.Errorf("Failed to notify changes to other repos")
 	}
 }
 
