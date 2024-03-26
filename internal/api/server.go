@@ -289,6 +289,13 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 					Message: "No peers were successfully notified about the push change",
 			}, nil
 	}
+
+	if err := s.storeRepoInDHT(ctx, req.Name, repo); err != nil {
+		return &pb.RepoInitResponse{
+			Success: false,
+			Message: "Failed to store repository details in DHT",
+		}, err
+	}
 	return &pb.NotifyPushCompletionResponse{
 		Success: true,
 		Message: "Peers have successfully notified about the push change",
@@ -296,29 +303,24 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 }
 
 func (s *RepositoryService) RequestToPull(ctx context.Context, req *pb.RequestToPullRequest) (bool, error) {
-	allPeers := s.Peer.GetPeers()
-
-	for i := 0; i < len(allPeers); i++ {
-		var currPeer = allPeers[i]
-		//cd to repo directory
-		args := []string{"cd"}
-		args = append(args, s.Git.reposDir)
+	//cd to repo directory
+	args := []string{"cd"}
+	args = append(args, s.Git.reposDir + "/" + req.Name)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		//try pulling from the current peerx
+		args := []string{"pull"}
+		args = append(args, req.GitAddress)
+		cmd := exec.Command("git", args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+
 		if err := cmd.Run(); err != nil {
-			//try pulling from the current peerx
-			args := []string{"pull"}
-			args = append(args, req.GitAddress)
-			cmd := exec.Command("git", args...)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-	
-			if err := cmd.Run(); err != nil {
-				return true, nil
-			} else {
-				return false, fmt.Errorf("Failed to pull latest changes")
-			} 
-		}
+			return true, nil
+		} else {
+			return false, fmt.Errorf("Failed to pull latest changes")
+		} 
 	}
 }
 
