@@ -7,6 +7,8 @@ service Repository {
     rpc Init(RepoInitRequest) returns (RepoInitResponse);
     rpc Pull(RepoPullRequest) returns (RepoPullResponse);
     rpc GetLeaderUrl(LeaderUrlRequest) returns (LeaderUrlResponse);
+    rpc RequestToPull(RequestToPullRequest) returns (RequestToPullResponse);
+    rpc NotifyPushCompletion(NotifyPushCompletionRequest) returns (NotifyPushCompletionResponse);
 }
 
 message RepoInitRequest {
@@ -42,10 +44,10 @@ message LeaderUrlRequest {
 }
 
 message LeaderUrlResponse {
-    string success = 1;
+    bool success = 1;
     string name = 2;
     string gitRepoAddress = 3;
-    string grpcPort = 4;
+    string grpcAddress = 4;
 }
 
 message NotifyPushCompletionRequest {
@@ -54,9 +56,14 @@ message NotifyPushCompletionRequest {
 
 message NotifyPushCompletionResponse {
     bool success = 1;
+    string message = 2;
 }
 
 message RequestToPullRequest {
     string name = 1;
     string gitAddress = 2;
+}
+
+message RequestToPullResponse {
+    bool success = 1;
 }

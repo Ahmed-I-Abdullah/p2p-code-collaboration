@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -226,10 +229,10 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 	// Add the current peer (Leader) ID to inSyncReplicas
 	repo.InSyncReplicas = append(repo.InSyncReplicas, s.Peer.Host.ID())
-	
+
 	// Update the version if needed
 	repo.Version++
-	
+
 	// Construct the git address
 	address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
 	gitAddress := fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name)
@@ -266,7 +269,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 		// Make gRPC call to RequestToPull
 		client := pb.NewRepositoryClient(conn)
 		pullReq := &pb.RequestToPullRequest{
-			Name:   req.Name,
+			Name:       req.Name,
 			GitAddress: gitAddress,
 		}
 		_, err = client.RequestToPull(ctx, pullReq)
@@ -281,17 +284,17 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 	// Add successful peers to in-sync list if there are any
 	if len(successfulPeers) > 0 {
-			repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
+		repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
 	} else {
-			// If there are no successful peers, return failure response
-			return &pb.NotifyPushCompletionResponse{
-					Success: false,
-					Message: "No peers were successfully notified about the push change",
-			}, nil
+		// If there are no successful peers, return failure response
+		return &pb.NotifyPushCompletionResponse{
+			Success: false,
+			Message: "No peers were successfully notified about the push change",
+		}, nil
 	}
 
-	if err := s.storeRepoInDHT(ctx, req.Name, repo); err != nil {
-		return &pb.RepoInitResponse{
+	if err := s.storeRepoInDHT(ctx, req.Name, *repo); err != nil {
+		return &pb.NotifyPushCompletionResponse{
 			Success: false,
 			Message: "Failed to store repository details in DHT",
 		}, err
@@ -302,26 +305,33 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	}, nil
 }
 
-func (s *RepositoryService) RequestToPull(ctx context.Context, req *pb.RequestToPullRequest) (bool, error) {
-	//cd to repo directory
-	args := []string{"cd"}
-	args = append(args, s.Git.reposDir + "/" + req.Name)
+func (s *RepositoryService) RequestToPull(ctx context.Context, req *pb.RequestToPullRequest) (*pb.RequestToPullResponse, error) {
+	args := []string{"cd", s.Git.ReposDir + "/" + req.Name}
+	cmd := exec.Command("bash", "-c", strings.Join(args, " "))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		//try pulling from the current peerx
-		args := []string{"pull"}
-		args = append(args, req.GitAddress)
-		cmd := exec.Command("git", args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		if err := cmd.Run(); err != nil {
-			return true, nil
-		} else {
-			return false, fmt.Errorf("Failed to pull latest changes")
-		} 
+		return &pb.RequestToPullResponse{
+			Success: false,
+		}, fmt.Errorf("Failed to change directory: %v", err)
 	}
+
+	args = []string{"pull", req.GitAddress}
+	cmd = exec.Command("git", args...)
+	cmd.Dir = s.Git.ReposDir + "/" + req.Name
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return &pb.RequestToPullResponse{
+			Success: true,
+		}, nil
+	} else {
+		return &pb.RequestToPullResponse{
+			Success: false,
+		}, fmt.Errorf("Failed to pull latest changes: %v", err)
+	}
+
 }
 
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
@@ -330,7 +340,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		return nil, err
 	}
 	// Make a copy of InSyncReplicas
-	sortedReplicas := make([]string, len(repo.InSyncReplicas))
+	sortedReplicas := make([]peer.ID, len(repo.InSyncReplicas))
 	copy(sortedReplicas, repo.InSyncReplicas)
 
 	// Sort the copy in descending order
@@ -343,10 +353,10 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		if replica == s.Peer.Host.ID() {
 			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
 			return &pb.LeaderUrlResponse{
-				Success:     true,
-				Name: req.Name,
-				RepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
-				GrpcPort: fmt.Sprintf("%s:%s", address, s.Peer.GrpcPort),
+				Success:        true,
+				Name:           req.Name,
+				GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
+				GrpcAddress:    fmt.Sprintf("%s:%s", address, s.Peer.GrpcPort),
 			}, nil
 		}
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
@@ -371,18 +381,18 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		conn.Close()
 
 		return &pb.LeaderUrlResponse{
-			Success: true,
-			Name: req.Name,
-			RepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
-			GrpcPort: fmt.Sprintf("%s:%s", address, peerInfo.GrpcPort),
+			Success:        true,
+			Name:           req.Name,
+			GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
+			GrpcAddress:    fmt.Sprintf("%s:%s", peerAddress, peerInfo.GrpcPort),
 		}, nil
 
 	}
 	return &pb.LeaderUrlResponse{
-		Success: false,
-		Name: req.Name,
-		RepoAddress: "",
-		GrpcPort: "",
+		Success:        false,
+		Name:           req.Name,
+		GitRepoAddress: "",
+		GrpcAddress:    "",
 	}, fmt.Errorf("failed to get git address for any insync relplica")
 }
 
