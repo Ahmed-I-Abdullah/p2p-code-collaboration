@@ -233,10 +233,6 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	// Update the version if needed
 	repo.Version++
 
-	// Construct the git address
-	address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
-	gitAddress := fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name)
-
 	// Slice to keep track of successful peers
 	successfulPeers := make([]peer.ID, 0)
 
@@ -252,29 +248,19 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 		peerInfo, err := s.Peer.GetPeerPortsFromDB(peerID)
 		if err != nil {
 			logger.Warnf("failed to get peer ports for peer: %s", peerID)
+		}
+
+		peerInfo, err = s.Peer.GetPeerPortsDirectly(peerID)
+		if err != nil {
+			logger.Warnf("failed to get peer ports directly: %s", peerID)
 			continue
 		}
 
-		// Create gRPC client connection to the peer
-		grpcCtx, grpcCancel := context.WithTimeout(ctx, time.Second*5)
-		defer grpcCancel()
-		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
-		conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
-		if err != nil {
-			logger.Warnf("failed to connect to peer: %s", target)
-			continue
-		}
-		defer conn.Close()
+		targetGitAddress := fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name)
 
-		// Make gRPC call to RequestToPull
-		client := pb.NewRepositoryClient(conn)
-		pullReq := &pb.RequestToPullRequest{
-			Name:       req.Name,
-			GitAddress: gitAddress,
-		}
-		_, err = client.RequestToPull(ctx, pullReq)
+		err = s.PushToPeer(req.Name, targetGitAddress)
 		if err != nil {
-			logger.Warnf("failed to pull from peer: %s", peerID)
+			logger.Warnf("failed to push changes to peer: %s", peerID)
 			continue
 		}
 
@@ -301,37 +287,27 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	}
 	return &pb.NotifyPushCompletionResponse{
 		Success: true,
-		Message: "Peers have successfully notified about the push change",
+		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(successfulPeers), repo.InSyncReplicas),
 	}, nil
 }
 
-func (s *RepositoryService) RequestToPull(ctx context.Context, req *pb.RequestToPullRequest) (*pb.RequestToPullResponse, error) {
-	args := []string{"cd", s.Git.ReposDir + "/" + req.Name}
-	cmd := exec.Command("bash", "-c", strings.Join(args, " "))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return &pb.RequestToPullResponse{
-			Success: false,
-		}, fmt.Errorf("Failed to change directory: %v", err)
+func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
+	repoPath := fmt.Sprintf("%s/%s", s.Git.ReposDir, repoName)
+
+	if err := os.Chdir(repoPath); err != nil {
+		return fmt.Errorf("failed to change directory to repository: %v", err)
 	}
 
-	args = []string{"pull", req.GitAddress}
-	cmd = exec.Command("git", args...)
-	cmd.Dir = s.Git.ReposDir + "/" + req.Name
+	cmd := exec.Command("git", "push", peerGitAddress, "--all")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return &pb.RequestToPullResponse{
-			Success: true,
-		}, nil
-	} else {
-		return &pb.RequestToPullResponse{
-			Success: false,
-		}, fmt.Errorf("Failed to pull latest changes: %v", err)
+		return fmt.Errorf("failed to push changes: %v", err)
 	}
 
+	logger.Infof("Pushed changes successfully to %s", peerGitAddress)
+	return nil
 }
 
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
@@ -356,7 +332,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 				Success:        true,
 				Name:           req.Name,
 				GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
-				GrpcAddress:    fmt.Sprintf("%s:%s", address, s.Peer.GrpcPort),
+				GrpcAddress:    fmt.Sprintf("%s:%d", address, s.Peer.GrpcPort),
 			}, nil
 		}
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
@@ -368,8 +344,14 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
 		if err != nil {
 			logger.Warnf("failed to get peer ports for peer: %s", replica)
+		}
+
+		peerInfo, err = s.Peer.GetPeerPortsDirectly(replica)
+		if err != nil {
+			logger.Warnf("failed to get peer ports directly: %s", replica)
 			continue
 		}
+
 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer grpcCancel()
 		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
@@ -419,8 +401,14 @@ func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (
 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
 		if err != nil {
 			logger.Warnf("failed to get peer ports for peer: %s", replica)
+		}
+
+		peerInfo, err = s.Peer.GetPeerPortsDirectly(replica)
+		if err != nil {
+			logger.Warnf("failed to get peer ports directly: %s", replica)
 			continue
 		}
+
 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer grpcCancel()
 		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)

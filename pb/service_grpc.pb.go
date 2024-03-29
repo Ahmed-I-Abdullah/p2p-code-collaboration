@@ -22,7 +22,6 @@ const (
 	Repository_Init_FullMethodName                 = "/api.Repository/Init"
 	Repository_Pull_FullMethodName                 = "/api.Repository/Pull"
 	Repository_GetLeaderUrl_FullMethodName         = "/api.Repository/GetLeaderUrl"
-	Repository_RequestToPull_FullMethodName        = "/api.Repository/RequestToPull"
 	Repository_NotifyPushCompletion_FullMethodName = "/api.Repository/NotifyPushCompletion"
 )
 
@@ -33,7 +32,6 @@ type RepositoryClient interface {
 	Init(ctx context.Context, in *RepoInitRequest, opts ...grpc.CallOption) (*RepoInitResponse, error)
 	Pull(ctx context.Context, in *RepoPullRequest, opts ...grpc.CallOption) (*RepoPullResponse, error)
 	GetLeaderUrl(ctx context.Context, in *LeaderUrlRequest, opts ...grpc.CallOption) (*LeaderUrlResponse, error)
-	RequestToPull(ctx context.Context, in *RequestToPullRequest, opts ...grpc.CallOption) (*RequestToPullResponse, error)
 	NotifyPushCompletion(ctx context.Context, in *NotifyPushCompletionRequest, opts ...grpc.CallOption) (*NotifyPushCompletionResponse, error)
 }
 
@@ -72,15 +70,6 @@ func (c *repositoryClient) GetLeaderUrl(ctx context.Context, in *LeaderUrlReques
 	return out, nil
 }
 
-func (c *repositoryClient) RequestToPull(ctx context.Context, in *RequestToPullRequest, opts ...grpc.CallOption) (*RequestToPullResponse, error) {
-	out := new(RequestToPullResponse)
-	err := c.cc.Invoke(ctx, Repository_RequestToPull_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *repositoryClient) NotifyPushCompletion(ctx context.Context, in *NotifyPushCompletionRequest, opts ...grpc.CallOption) (*NotifyPushCompletionResponse, error) {
 	out := new(NotifyPushCompletionResponse)
 	err := c.cc.Invoke(ctx, Repository_NotifyPushCompletion_FullMethodName, in, out, opts...)
@@ -97,7 +86,6 @@ type RepositoryServer interface {
 	Init(context.Context, *RepoInitRequest) (*RepoInitResponse, error)
 	Pull(context.Context, *RepoPullRequest) (*RepoPullResponse, error)
 	GetLeaderUrl(context.Context, *LeaderUrlRequest) (*LeaderUrlResponse, error)
-	RequestToPull(context.Context, *RequestToPullRequest) (*RequestToPullResponse, error)
 	NotifyPushCompletion(context.Context, *NotifyPushCompletionRequest) (*NotifyPushCompletionResponse, error)
 	mustEmbedUnimplementedRepositoryServer()
 }
@@ -114,9 +102,6 @@ func (UnimplementedRepositoryServer) Pull(context.Context, *RepoPullRequest) (*R
 }
 func (UnimplementedRepositoryServer) GetLeaderUrl(context.Context, *LeaderUrlRequest) (*LeaderUrlResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetLeaderUrl not implemented")
-}
-func (UnimplementedRepositoryServer) RequestToPull(context.Context, *RequestToPullRequest) (*RequestToPullResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RequestToPull not implemented")
 }
 func (UnimplementedRepositoryServer) NotifyPushCompletion(context.Context, *NotifyPushCompletionRequest) (*NotifyPushCompletionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifyPushCompletion not implemented")
@@ -188,24 +173,6 @@ func _Repository_GetLeaderUrl_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Repository_RequestToPull_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RequestToPullRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RepositoryServer).RequestToPull(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Repository_RequestToPull_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RepositoryServer).RequestToPull(ctx, req.(*RequestToPullRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Repository_NotifyPushCompletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NotifyPushCompletionRequest)
 	if err := dec(in); err != nil {
@@ -242,10 +209,6 @@ var Repository_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetLeaderUrl",
 			Handler:    _Repository_GetLeaderUrl_Handler,
-		},
-		{
-			MethodName: "RequestToPull",
-			Handler:    _Repository_RequestToPull_Handler,
 		},
 		{
 			MethodName: "NotifyPushCompletion",
