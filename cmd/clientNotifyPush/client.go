@@ -36,9 +36,9 @@ func main() {
 	defer cancel()
 
 	logger.Printf("Getting git address for repo: %s", defaultName)
-	r, err := c.Pull(ctx, &pb.RepoPullRequest{Name: defaultName})
+	r, err := c.NotifyPushCompletion(ctx, &pb.NotifyPushCompletionRequest{Name: defaultName})
 	if err != nil {
-		logger.Fatalf("Failed to get repository address: %v", err)
+		logger.Fatalf("Failed to notify push completion: %v", err)
 	}
-	logger.Printf("Repository address retrieved successfully. Server Response: %v", r.RepoAddress)
+	logger.Printf("Leader notified successfully. Server Response: %v", r)
 }

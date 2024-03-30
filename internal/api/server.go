@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -216,6 +219,165 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 	return true, nil
 }
 
+func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.NotifyPushCompletionRequest) (*pb.NotifyPushCompletionResponse, error) {
+	repo, err := s.getRepoInDHT(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	// Clear the inSyncReplicas
+	repo.InSyncReplicas = make([]peer.ID, 0)
+
+	// Add the current peer (Leader) ID to inSyncReplicas
+	repo.InSyncReplicas = append(repo.InSyncReplicas, s.Peer.Host.ID())
+
+	// Update the version if needed
+	repo.Version++
+
+	// Slice to keep track of successful peers
+	successfulPeers := make([]peer.ID, 0)
+
+	// Iterate over peers in repo.PeerIDs and make pull requests
+	for _, peerID := range repo.PeerIDs {
+		// Fetch peer information
+		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
+		peerAddress := peerAddresses[0]
+		ipAddress, err := extractIPAddr(peerAddress.String())
+		if err != nil {
+			continue
+		}
+		peerInfo, err := s.Peer.GetPeerPortsFromDB(peerID)
+		if err != nil {
+			logger.Warnf("failed to get peer ports for peer: %s", peerID)
+		}
+
+		peerInfo, err = s.Peer.GetPeerPortsDirectly(peerID)
+		if err != nil {
+			logger.Warnf("failed to get peer ports directly: %s", peerID)
+			continue
+		}
+
+		targetGitAddress := fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name)
+
+		err = s.PushToPeer(req.Name, targetGitAddress)
+		if err != nil {
+			logger.Warnf("failed to push changes to peer: %s", peerID)
+			continue
+		}
+
+		// If pull request is successful, add peer to successful peers slice
+		successfulPeers = append(successfulPeers, peerID)
+	}
+
+	// Add successful peers to in-sync list if there are any
+	if len(successfulPeers) > 0 {
+		repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
+	} else {
+		// If there are no successful peers, return failure response
+		return &pb.NotifyPushCompletionResponse{
+			Success: false,
+			Message: "No peers were successfully notified about the push change",
+		}, nil
+	}
+
+	if err := s.storeRepoInDHT(ctx, req.Name, *repo); err != nil {
+		return &pb.NotifyPushCompletionResponse{
+			Success: false,
+			Message: "Failed to store repository details in DHT",
+		}, err
+	}
+	return &pb.NotifyPushCompletionResponse{
+		Success: true,
+		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(successfulPeers), repo.InSyncReplicas),
+	}, nil
+}
+
+func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
+	repoPath := fmt.Sprintf("%s/%s", s.Git.ReposDir, repoName)
+
+	if err := os.Chdir(repoPath); err != nil {
+		return fmt.Errorf("failed to change directory to repository: %v", err)
+	}
+
+	cmd := exec.Command("git", "push", peerGitAddress, "--all")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to push changes: %v", err)
+	}
+
+	logger.Infof("Pushed changes successfully to %s", peerGitAddress)
+	return nil
+}
+
+func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
+	repo, err := s.getRepoInDHT(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	// Make a copy of InSyncReplicas
+	sortedReplicas := make([]peer.ID, len(repo.InSyncReplicas))
+	copy(sortedReplicas, repo.InSyncReplicas)
+
+	// Sort the copy in descending order
+	sort.Slice(sortedReplicas, func(i, j int) bool {
+		return sortedReplicas[i] > sortedReplicas[j]
+	})
+
+	for i := 0; i < len(sortedReplicas); i++ {
+		var replica = repo.InSyncReplicas[i]
+		if replica == s.Peer.Host.ID() {
+			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
+			return &pb.LeaderUrlResponse{
+				Success:        true,
+				Name:           req.Name,
+				GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
+				GrpcAddress:    fmt.Sprintf("%s:%d", address, s.Peer.GrpcPort),
+			}, nil
+		}
+		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
+		peerAddress := peerAddresses[0]
+		ipAddress, err := extractIPAddr(peerAddress.String())
+		if err != nil {
+			continue
+		}
+		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
+		if err != nil {
+			logger.Warnf("failed to get peer ports for peer: %s", replica)
+		}
+
+		peerInfo, err = s.Peer.GetPeerPortsDirectly(replica)
+		if err != nil {
+			logger.Warnf("failed to get peer ports directly: %s", replica)
+			continue
+		}
+
+		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer grpcCancel()
+		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
+		conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
+		if err != nil {
+			logger.Warnf("failed to connect to peer: %s", target)
+			continue
+		}
+		conn.Close()
+
+		return &pb.LeaderUrlResponse{
+			Success:        true,
+			Name:           req.Name,
+			GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
+			GrpcAddress:    fmt.Sprintf("%s:%s", peerAddress, peerInfo.GrpcPort),
+		}, nil
+
+	}
+	return &pb.LeaderUrlResponse{
+		Success:        false,
+		Name:           req.Name,
+		GitRepoAddress: "",
+		GrpcAddress:    "",
+	}, fmt.Errorf("failed to get git address for any insync relplica")
+}
+
 func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
 	repo, err := s.getRepoInDHT(ctx, req.Name)
 	if err != nil {
@@ -239,8 +401,14 @@ func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (
 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
 		if err != nil {
 			logger.Warnf("failed to get peer ports for peer: %s", replica)
+		}
+
+		peerInfo, err = s.Peer.GetPeerPortsDirectly(replica)
+		if err != nil {
+			logger.Warnf("failed to get peer ports directly: %s", replica)
 			continue
 		}
+
 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer grpcCancel()
 		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
