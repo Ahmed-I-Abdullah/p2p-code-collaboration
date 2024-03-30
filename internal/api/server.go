@@ -268,16 +268,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 		successfulPeers = append(successfulPeers, peerID)
 	}
 
-	// Add successful peers to in-sync list if there are any
-	if len(successfulPeers) > 0 {
-		repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
-	} else {
-		// If there are no successful peers, return failure response
-		return &pb.NotifyPushCompletionResponse{
-			Success: false,
-			Message: "No peers were successfully notified about the push change",
-		}, nil
-	}
+	repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
 
 	if err := s.storeRepoInDHT(ctx, req.Name, *repo); err != nil {
 		return &pb.NotifyPushCompletionResponse{
@@ -287,7 +278,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	}
 	return &pb.NotifyPushCompletionResponse{
 		Success: true,
-		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(successfulPeers), repo.InSyncReplicas),
+		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(repo.InSyncReplicas), repo.InSyncReplicas),
 	}, nil
 }
 
