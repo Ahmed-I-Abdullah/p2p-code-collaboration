@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package api;
+option go_package = "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/pb";
+
+service Election {
+    rpc Election(ElectionRequest) returns (ElectionResponse);
+    rpc LeaderAnnouncement(LeaderAnnouncementRequest) returns (LeaderAnnouncementResponse);
+}
+
+message ElectionRequest {
+    string nodeId = 1;
+    string repoName = 2;
+}
+
+message ElectionResponse {
+    string type = 1;
+}
+
+
+message LeaderAnnouncementRequest {
+    string leaderId = 1;
+    string repoName = 2;
+}
+
+message LeaderAnnouncementResponse {}
