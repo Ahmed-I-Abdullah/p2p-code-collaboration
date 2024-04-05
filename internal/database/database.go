@@ -2,16 +2,17 @@ package database
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/dgraph-io/badger/v4"
 	"github.com/ipfs/go-log/v2"
-	"time"
 )
 
 var logger = log.Logger("database")
 var DBCon *badger.DB
 
 func Init(id int) error {
-	err := log.SetLogLevel("database", "debug")
+	err := log.SetLogLevel("database", "info")
 	if err != nil {
 		logger.Error("could not set log level for the db logger")
 	}

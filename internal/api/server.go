@@ -31,9 +31,12 @@ type RepositoryService struct {
 	Git  *gitops.Git
 }
 
-func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
+func Init() {
 	log.SetLogLevel("grpcService", "info")
-	replicationFactor := 2
+}
+
+func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
+	replicationFactor := 3
 	logger.Info("Received request to initialize a repository")
 
 	if req.FromCli {
@@ -260,7 +263,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 		err = s.PushToPeer(req.Name, targetGitAddress)
 		if err != nil {
-			logger.Warnf("failed to push changes to peer: %s", peerID)
+			logger.Warnf("failed to push changes to peer: %s. Error: %v", peerID, err)
 			continue
 		}
 
@@ -285,15 +288,15 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
 	repoPath := fmt.Sprintf("%s/%s", s.Git.ReposDir, repoName)
 
-	if err := os.Chdir(repoPath); err != nil {
-		return fmt.Errorf("failed to change directory to repository: %v", err)
-	}
+	logger.Infof("repo dir: %v, %v", repoPath, peerGitAddress)
 
 	cmd := exec.Command("git", "push", peerGitAddress, "--all")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Dir = repoPath
 
 	if err := cmd.Run(); err != nil {
+		fmt.Errorf("Failed to execute a git push with error: %v", err)
 		return fmt.Errorf("failed to push changes: %v", err)
 	}
 

@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"os"
+
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
@@ -17,6 +18,8 @@ import (
 func main() {
 	logger := log.Logger("main")
 	log.SetLogLevel("main", "info")
+
+	api.Init()
 
 	logger.Info("Parsing input flags")
 	ctx := context.Background()

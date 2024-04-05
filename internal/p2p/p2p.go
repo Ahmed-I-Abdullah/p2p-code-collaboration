@@ -40,7 +40,7 @@ type Peer struct {
 }
 
 func Initialize(config flags.Config) (*Peer, error) {
-	log.SetLogLevel("p2p", "info")
+	log.SetLogLevel("p2p", "error")
 	ctx := context.Background()
 
 	priv, err := RetrievePrivateKey(config.PrivateKeyFile)
