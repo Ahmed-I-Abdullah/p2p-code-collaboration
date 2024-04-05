@@ -2,19 +2,18 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"sort"
-	"strings"
 	"time"
 
-	constansts "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/gitops"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
+	util "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/utils"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/utils/dhtutil"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/pb"
 	"github.com/ipfs/go-log"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -40,7 +39,7 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 	logger.Info("Received request to initialize a repository")
 
 	if req.FromCli {
-		existingRepository, err := s.Peer.DHT.GetValue(ctx, getDHTPathFromRepoName(req.Name))
+		existingRepository, err := s.Peer.DHT.GetValue(ctx, dhtutil.GetDHTPathFromRepoName(req.Name))
 
 		if err != routing.ErrNotFound && err != nil {
 			logger.Errorf("Failed to check if repository with key %s exists in DHT: %v", req.Name, err)
@@ -115,7 +114,7 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 			Version:        1,
 		}
 
-		if err := s.storeRepoInDHT(ctx, req.Name, repo); err != nil {
+		if err := dhtutil.StoreRepoInDHT(ctx, s.Peer, req.Name, repo); err != nil {
 			return &pb.RepoInitResponse{
 				Success: false,
 				Message: "Failed to store repository details in DHT",
@@ -184,7 +183,7 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 		return false, fmt.Errorf("failed to get peer ports: %w", err)
 	}
 
-	ipAddress, err := extractIPAddr(peerAddress.String())
+	ipAddress, err := util.ExtractIPAddr(peerAddress.String())
 	if err != nil {
 		return false, fmt.Errorf("failed to get peer IP Adress: %w", err)
 	}
@@ -223,7 +222,7 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 }
 
 func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.NotifyPushCompletionRequest) (*pb.NotifyPushCompletionResponse, error) {
-	repo, err := s.getRepoInDHT(ctx, req.Name)
+	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +247,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 		// Fetch peer information
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
 		peerAddress := peerAddresses[0]
-		ipAddress, err := extractIPAddr(peerAddress.String())
+		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
 		if err != nil {
 			continue
 		}
@@ -277,7 +276,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 	repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
 
-	if err := s.storeRepoInDHT(ctx, req.Name, *repo); err != nil {
+	if err := dhtutil.StoreRepoInDHT(ctx, s.Peer, req.Name, *repo); err != nil {
 		return &pb.NotifyPushCompletionResponse{
 			Success: false,
 			Message: "Failed to store repository details in DHT",
@@ -309,7 +308,7 @@ func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
 }
 
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
-	repo, err := s.getRepoInDHT(ctx, req.Name)
+	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +327,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		var replica = sortedReplicas[i]
 		logger.Infof("Trying to get leader with id %s", replica)
 		if replica == s.Peer.Host.ID() {
-			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
+			address, _ := util.ExtractIPAddr(s.Peer.Host.Addrs()[0].String())
 			return &pb.LeaderUrlResponse{
 				Success:        true,
 				Name:           req.Name,
@@ -338,7 +337,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		}
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
 		peerAddress := peerAddresses[0]
-		ipAddress, err := extractIPAddr(peerAddress.String())
+		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
 		if err != nil {
 			logger.Warnf("Failed to extract IP address for peer: %s", replica)
 			continue
@@ -383,14 +382,14 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 }
 
 func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
-	repo, err := s.getRepoInDHT(ctx, req.Name)
+	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
 		return nil, err
 	}
 	for i := 0; i < len(repo.InSyncReplicas); i++ {
 		var replica = repo.InSyncReplicas[i]
 		if replica == s.Peer.Host.ID() {
-			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
+			address, _ := util.ExtractIPAddr(s.Peer.Host.Addrs()[0].String())
 			return &pb.RepoPullResponse{
 				Success:     true,
 				RepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
@@ -398,7 +397,7 @@ func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (
 		}
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
 		peerAddress := peerAddresses[0]
-		ipAddress, err := extractIPAddr(peerAddress.String())
+		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
 		if err != nil {
 			continue
 		}
@@ -433,44 +432,6 @@ func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (
 		Success:     false,
 		RepoAddress: "",
 	}, fmt.Errorf("failed to get git address for any insync relplica")
-}
-
-func (s *RepositoryService) storeRepoInDHT(ctx context.Context, key string, repo p2p.RepositoryPeers) error {
-	repoBytes, err := json.Marshal(repo)
-	if err != nil {
-		return fmt.Errorf("failed to serialize repository peers data: %w", err)
-	}
-
-	if err := s.Peer.DHT.PutValue(ctx, getDHTPathFromRepoName(key), repoBytes); err != nil {
-		return fmt.Errorf("failed to store repository peers data in DHT: %w", err)
-	}
-	return nil
-}
-
-func (s *RepositoryService) getRepoInDHT(ctx context.Context, key string) (*p2p.RepositoryPeers, error) {
-	repoBytes, err := s.Peer.DHT.GetValue(ctx, getDHTPathFromRepoName(key))
-	if err != nil {
-		return nil, fmt.Errorf("failed to deserialize repository peers data: %w", err)
-	}
-	var repo p2p.RepositoryPeers
-	err = json.Unmarshal(repoBytes, &repo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve repository peers data in DHT: %w", err)
-	}
-	return &repo, nil
-}
-
-func extractIPAddr(address string) (string, error) {
-	parts := strings.Split(address, "/")
-	if len(parts) < 3 {
-		return "", fmt.Errorf("unexpected format")
-	}
-
-	return parts[2], nil
-}
-
-func getDHTPathFromRepoName(repoName string) string {
-	return fmt.Sprintf("%s/%s", constansts.DHTRepoPrefix, repoName)
 }
 
 func StartServer(ctx context.Context, peer *p2p.Peer, git *gitops.Git) error {

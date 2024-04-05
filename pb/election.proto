@@ -8,9 +8,16 @@ service Election {
     rpc LeaderAnnouncement(LeaderAnnouncementRequest) returns (LeaderAnnouncementResponse);
 }
 
+enum ElectionType {
+    UNKNOWN = 0;
+    BULLY = 1;
+    OTHER = 2;
+}
+
 message ElectionRequest {
     string nodeId = 1;
-    string repoName = 2;
+    string grpcUrl = 2;
+    string repoName = 3;
 }
 
 message ElectionResponse {
