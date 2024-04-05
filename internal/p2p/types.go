@@ -7,8 +7,14 @@ type PeerInfo struct {
 	GitDaemonPort int `json:"git_daemon_port"`
 }
 
+type PeerAddresses struct {
+	GrpcAddress string
+	GitAddress  string
+}
+
 type RepositoryPeers struct {
 	PeerIDs        []peer.ID `json:"peerIDs"`
 	InSyncReplicas []peer.ID `json:"inSyncReplicas"`
+	LeaderID       peer.ID   `json:"leaderID"`
 	Version        int       `json:"version"`
 }

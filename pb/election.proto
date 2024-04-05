@@ -9,19 +9,19 @@ service Election {
 }
 
 enum ElectionType {
-    UNKNOWN = 0;
+    SUCCESS = 0;
     BULLY = 1;
     OTHER = 2;
 }
 
 message ElectionRequest {
     string nodeId = 1;
-    string grpcUrl = 2;
-    string repoName = 3;
+    string repoName = 2;
 }
 
 message ElectionResponse {
     string type = 1;
+    string newLeaderId = 2;
 }
 
 

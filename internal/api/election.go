@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"sort"
+	"time"
 
 	"fmt"
 
@@ -29,13 +30,13 @@ type ElectionState struct {
 	InElection bool
 }
 
-var repoElectionState map[string]ElectionState
+var repoElectionState map[string]ElectionState = make(map[string]ElectionState)
+var leaderAnnouncementCh = make(chan *pb.LeaderAnnouncementRequest)
 
-func init() {
-	repoElectionState = make(map[string]ElectionState)
-}
+// func init() {
+// 	repoElectionState = make(map[string]ElectionState)
+// }
 
-// InitiateElection implements the bully algorithm
 func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest) (*pb.ElectionResponse, error) {
 	repoName := req.RepoName
 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.RepoName)
@@ -125,11 +126,11 @@ func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest)
 
 					if err != nil {
 						logger.Errorf("Failed to initiate election on peer %s: %v", peerAddr, err)
-						// return
+						return
 					}
 
 					if resp.Type == pb.ElectionType_BULLY.String() {
-						// Bigger guys are alive, I am no longer participating
+						// Bigger guys are alive, I am no longer participating :(
 						existingState := repoElectionState[repoName]
 						existingState.InElection = false
 						repoElectionState[repoName] = existingState
@@ -138,8 +139,27 @@ func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest)
 			}
 		}
 
-		// TODO:
-		// Need a way to wait for leader annoncement and if didnt receive reinitate the election
+		timeout := time.After(5 * time.Second)
+
+		for {
+			select {
+			case leaderAnnouncement := <-leaderAnnouncementCh:
+				// Check if the leader announcement is for the current repository
+				if leaderAnnouncement.RepoName == repoName {
+					leaderID := leaderAnnouncement.LeaderId
+					fmt.Printf("Leader announced for repository %s: %s\n", repoName, leaderID)
+					return &pb.ElectionResponse{
+						Type:        pb.ElectionType_SUCCESS.String(),
+						NewLeaderId: leaderID,
+					}, nil
+				}
+
+			// need to handle this better because client won't wait lol
+			case <-timeout:
+				fmt.Println("Leader announcement not received within timeout, reinitiating election...")
+				return s.Election(ctx, req)
+			}
+		}
 	}
 
 	return &pb.ElectionResponse{Type: pb.ElectionType_OTHER.String()}, nil
@@ -153,6 +173,25 @@ func (s *ElectionService) LeaderAnnouncement(ctx context.Context, req *pb.Leader
 	}
 
 	repoElectionState[repoName] = state
+
+	leaderAnnouncementCh <- req
+
+	// Try storing the leader ID into DHT
+	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.RepoName)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if repo.LeaderID.String() == req.LeaderId {
+		return &pb.LeaderAnnouncementResponse{}, nil
+	}
+
+	repo.LeaderID = peer.ID(req.LeaderId)
+
+	if err := dhtutil.StoreRepoInDHT(ctx, s.Peer, req.RepoName, *repo); err != nil {
+		return nil, err
+	}
 
 	return &pb.LeaderAnnouncementResponse{}, nil
 }
