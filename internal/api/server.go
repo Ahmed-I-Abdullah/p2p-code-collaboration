@@ -241,6 +241,10 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 	// Iterate over peers in repo.PeerIDs and make pull requests
 	for _, peerID := range repo.PeerIDs {
+		if peerID == s.Peer.Host.ID() {
+			continue
+		}
+
 		// Fetch peer information
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
 		peerAddress := peerAddresses[0]
@@ -318,8 +322,11 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		return sortedReplicas[i] > sortedReplicas[j]
 	})
 
+	logger.Infof("Sorted ISR List is: %v", sortedReplicas)
+
 	for i := 0; i < len(sortedReplicas); i++ {
-		var replica = repo.InSyncReplicas[i]
+		var replica = sortedReplicas[i]
+		logger.Infof("Trying to get leader with id %s", replica)
 		if replica == s.Peer.Host.ID() {
 			address, _ := extractIPAddr(s.Peer.Host.Addrs()[0].String())
 			return &pb.LeaderUrlResponse{
@@ -333,6 +340,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		peerAddress := peerAddresses[0]
 		ipAddress, err := extractIPAddr(peerAddress.String())
 		if err != nil {
+			logger.Warnf("Failed to extract IP address for peer: %s", replica)
 			continue
 		}
 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
@@ -356,12 +364,14 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		}
 		conn.Close()
 
-		return &pb.LeaderUrlResponse{
+		leaderUrlResponse := &pb.LeaderUrlResponse{
 			Success:        true,
 			Name:           req.Name,
 			GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
-			GrpcAddress:    fmt.Sprintf("%s:%s", peerAddress, peerInfo.GrpcPort),
-		}, nil
+			GrpcAddress:    fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort),
+		}
+
+		return leaderUrlResponse, nil
 
 	}
 	return &pb.LeaderUrlResponse{
