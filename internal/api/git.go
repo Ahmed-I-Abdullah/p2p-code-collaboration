@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"time"
 
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/gitops"
@@ -264,7 +262,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 		targetGitAddress := fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name)
 
-		err = s.PushToPeer(req.Name, targetGitAddress)
+		err = s.Git.PushToPeer(req.Name, targetGitAddress)
 		if err != nil {
 			logger.Warnf("failed to push changes to peer: %s. Error: %v", peerID, err)
 			continue
@@ -286,25 +284,6 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 		Success: true,
 		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(repo.InSyncReplicas), repo.InSyncReplicas),
 	}, nil
-}
-
-func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
-	repoPath := fmt.Sprintf("%s/%s", s.Git.ReposDir, repoName)
-
-	logger.Infof("repo dir: %v, %v", repoPath, peerGitAddress)
-
-	cmd := exec.Command("git", "push", peerGitAddress, "--all")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Dir = repoPath
-
-	if err := cmd.Run(); err != nil {
-		fmt.Errorf("Failed to execute a git push with error: %v", err)
-		return fmt.Errorf("failed to push changes: %v", err)
-	}
-
-	logger.Infof("Pushed changes successfully to %s", peerGitAddress)
-	return nil
 }
 
 // func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
