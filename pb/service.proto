@@ -8,6 +8,7 @@ service Repository {
     rpc Pull(RepoPullRequest) returns (RepoPullResponse);
     rpc GetLeaderUrl(LeaderUrlRequest) returns (LeaderUrlResponse);
     rpc NotifyPushCompletion(NotifyPushCompletionRequest) returns (NotifyPushCompletionResponse);
+    rpc AcquireLock(AcquireLockRequest) returns (AcquireLockResponse);
 }
 
 message RepoInitRequest {
@@ -56,4 +57,12 @@ message NotifyPushCompletionRequest {
 message NotifyPushCompletionResponse {
     bool success = 1;
     string message = 2;
+}
+
+message AcquireLockRequest {
+    string repoName = 1;
+}
+
+message AcquireLockResponse {
+    bool ok = 1;
 }

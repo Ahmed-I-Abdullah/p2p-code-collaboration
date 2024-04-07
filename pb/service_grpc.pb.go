@@ -23,6 +23,7 @@ const (
 	Repository_Pull_FullMethodName                 = "/api.Repository/Pull"
 	Repository_GetLeaderUrl_FullMethodName         = "/api.Repository/GetLeaderUrl"
 	Repository_NotifyPushCompletion_FullMethodName = "/api.Repository/NotifyPushCompletion"
+	Repository_AcquireLock_FullMethodName          = "/api.Repository/AcquireLock"
 )
 
 // RepositoryClient is the client API for Repository service.
@@ -33,6 +34,7 @@ type RepositoryClient interface {
 	Pull(ctx context.Context, in *RepoPullRequest, opts ...grpc.CallOption) (*RepoPullResponse, error)
 	GetLeaderUrl(ctx context.Context, in *LeaderUrlRequest, opts ...grpc.CallOption) (*LeaderUrlResponse, error)
 	NotifyPushCompletion(ctx context.Context, in *NotifyPushCompletionRequest, opts ...grpc.CallOption) (*NotifyPushCompletionResponse, error)
+	AcquireLock(ctx context.Context, in *AcquireLockRequest, opts ...grpc.CallOption) (*AcquireLockResponse, error)
 }
 
 type repositoryClient struct {
@@ -79,6 +81,15 @@ func (c *repositoryClient) NotifyPushCompletion(ctx context.Context, in *NotifyP
 	return out, nil
 }
 
+func (c *repositoryClient) AcquireLock(ctx context.Context, in *AcquireLockRequest, opts ...grpc.CallOption) (*AcquireLockResponse, error) {
+	out := new(AcquireLockResponse)
+	err := c.cc.Invoke(ctx, Repository_AcquireLock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RepositoryServer is the server API for Repository service.
 // All implementations must embed UnimplementedRepositoryServer
 // for forward compatibility
@@ -87,6 +98,7 @@ type RepositoryServer interface {
 	Pull(context.Context, *RepoPullRequest) (*RepoPullResponse, error)
 	GetLeaderUrl(context.Context, *LeaderUrlRequest) (*LeaderUrlResponse, error)
 	NotifyPushCompletion(context.Context, *NotifyPushCompletionRequest) (*NotifyPushCompletionResponse, error)
+	AcquireLock(context.Context, *AcquireLockRequest) (*AcquireLockResponse, error)
 	mustEmbedUnimplementedRepositoryServer()
 }
 
@@ -105,6 +117,9 @@ func (UnimplementedRepositoryServer) GetLeaderUrl(context.Context, *LeaderUrlReq
 }
 func (UnimplementedRepositoryServer) NotifyPushCompletion(context.Context, *NotifyPushCompletionRequest) (*NotifyPushCompletionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifyPushCompletion not implemented")
+}
+func (UnimplementedRepositoryServer) AcquireLock(context.Context, *AcquireLockRequest) (*AcquireLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcquireLock not implemented")
 }
 func (UnimplementedRepositoryServer) mustEmbedUnimplementedRepositoryServer() {}
 
@@ -191,6 +206,24 @@ func _Repository_NotifyPushCompletion_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Repository_AcquireLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RepositoryServer).AcquireLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Repository_AcquireLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RepositoryServer).AcquireLock(ctx, req.(*AcquireLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Repository_ServiceDesc is the grpc.ServiceDesc for Repository service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -213,6 +246,10 @@ var Repository_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NotifyPushCompletion",
 			Handler:    _Repository_NotifyPushCompletion_Handler,
+		},
+		{
+			MethodName: "AcquireLock",
+			Handler:    _Repository_AcquireLock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
