@@ -57,14 +57,16 @@ func Initialize(config flags.Config) (*Peer, error) {
 	logger.Infof("Listening on addresses: %v", host.Addrs())
 
 	validator := record.NamespacedValidator{
-		"pk":   record.PublicKeyValidator{},
-		"ipns": ipns.Validator{},
-		"repo": RepoValidator{},
+		"pk":     record.PublicKeyValidator{},
+		"ipns":   ipns.Validator{},
+		"repo":   RepoValidator{},
+		"leader": LeaderIDValidator{},
 	}
 
 	dhtOptions := []dht.Option{
 		dht.Mode(dht.ModeServer),
 		dht.ProtocolPrefix(constants.DHTRepoPrefix),
+		dht.ProtocolPrefix(constants.DHTLeaderPrefix),
 		dht.Validator(validator),
 	}
 

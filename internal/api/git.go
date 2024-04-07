@@ -382,6 +382,14 @@ func (s *RepositoryService) getLeaderFromRepoPeers(ctx context.Context, repoName
 }
 
 func (s *RepositoryService) getPeerAdressesFromId(peerID peer.ID) (*p2p.PeerAddresses, error) {
+	if peerID == s.Peer.Host.ID() {
+		address, _ := util.ExtractIPAddr(s.Peer.Host.Addrs()[0].String())
+		return &p2p.PeerAddresses{
+			ID:          peerID,
+			GitAddress:  fmt.Sprintf("git://%s:%d", address, s.Peer.GitDaemonPort),
+			GrpcAddress: fmt.Sprintf("%s:%d", address, s.Peer.GrpcPort),
+		}, nil
+	}
 	peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
 	if len(peerAddresses) == 0 {
 		return nil, fmt.Errorf("Failed to get peer addresses for peer with ID %s from peer store", peerID.String())
