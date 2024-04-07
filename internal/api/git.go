@@ -28,6 +28,10 @@ type RepositoryService struct {
 	Git  *gitops.Git
 }
 
+func Init() {
+	log.SetLogLevel("grpcService", "info")
+}
+
 func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
 	log.SetLogLevel("grpcService", "info")
 	replicationFactor := 2
@@ -236,6 +240,10 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 	// Iterate over peers in repo.PeerIDs and make pull requests
 	for _, peerID := range repo.PeerIDs {
+		if peerID == s.Peer.Host.ID() {
+			continue
+		}
+
 		// Fetch peer information
 		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
 		peerAddress := peerAddresses[0]
@@ -258,7 +266,7 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 
 		err = s.PushToPeer(req.Name, targetGitAddress)
 		if err != nil {
-			logger.Warnf("failed to push changes to peer: %s", peerID)
+			logger.Warnf("failed to push changes to peer: %s. Error: %v", peerID, err)
 			continue
 		}
 
@@ -283,15 +291,15 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
 	repoPath := fmt.Sprintf("%s/%s", s.Git.ReposDir, repoName)
 
-	if err := os.Chdir(repoPath); err != nil {
-		return fmt.Errorf("failed to change directory to repository: %v", err)
-	}
+	logger.Infof("repo dir: %v, %v", repoPath, peerGitAddress)
 
 	cmd := exec.Command("git", "push", peerGitAddress, "--all")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Dir = repoPath
 
 	if err := cmd.Run(); err != nil {
+		fmt.Errorf("Failed to execute a git push with error: %v", err)
 		return fmt.Errorf("failed to push changes: %v", err)
 	}
 
@@ -313,8 +321,12 @@ func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
 // 		return sortedReplicas[i] > sortedReplicas[j]
 // 	})
 
+// 	logger.Infof("Sorted ISR List is: %v", sortedReplicas)
+
 // 	for i := 0; i < len(sortedReplicas); i++ {
-// 		var replica = repo.InSyncReplicas[i]
+// 		var replica = sortedReplicas[i]
+// 		logger.Infof("Trying to get leader with id %s", replica)
+
 // 		if replica == s.Peer.Host.ID() {
 // 			address, _ := util.ExtractIPAddr(s.Peer.Host.Addrs()[0].String())
 // 			return &pb.LeaderUrlResponse{
@@ -328,6 +340,7 @@ func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
 // 		peerAddress := peerAddresses[0]
 // 		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
 // 		if err != nil {
+// 			logger.Warnf("Failed to extract IP address for peer: %s", replica)
 // 			continue
 // 		}
 // 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
@@ -351,14 +364,17 @@ func (s *RepositoryService) PushToPeer(repoName, peerGitAddress string) error {
 // 		}
 // 		conn.Close()
 
-// 		return &pb.LeaderUrlResponse{
+// 		leaderUrlResponse := &pb.LeaderUrlResponse{
 // 			Success:        true,
 // 			Name:           req.Name,
 // 			GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
-// 			GrpcAddress:    fmt.Sprintf("%s:%s", peerAddress, peerInfo.GrpcPort),
-// 		}, nil
+// 			GrpcAddress:    fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort),
+// 		}
+
+// 		return leaderUrlResponse, nil
 
 // 	}
+
 // 	return &pb.LeaderUrlResponse{
 // 		Success:        false,
 // 		Name:           req.Name,
