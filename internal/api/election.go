@@ -246,7 +246,9 @@ func (s *ElectionService) announceLeader(repoName string, leader string, peers m
 }
 
 func (s *ElectionService) contactPeerForElection(addresses *p2p.PeerAddresses, repoName string, ch chan<- string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	logger.Debugf("contactPeerForElection: Contacting peer with ID %s for leader election for repo: %s", addresses.ID.String(), repoName)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addresses.GrpcAddress, grpc.WithInsecure())
 
@@ -263,8 +265,10 @@ func (s *ElectionService) contactPeerForElection(addresses *p2p.PeerAddresses, r
 	})
 
 	if err != nil || resp.NewLeaderId == "" {
+		logger.Errorf("Failed to get election result from peer with ID %s. Error: %v", addresses.ID.String(), err)
 		ch <- ""
 	} else {
+		logger.Debugf("Received election result from peer %s. New leader is: %s", addresses.ID.String(), resp.NewLeaderId)
 		ch <- resp.NewLeaderId
 	}
 }

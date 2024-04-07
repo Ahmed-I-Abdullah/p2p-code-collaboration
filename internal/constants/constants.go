@@ -11,4 +11,4 @@ var DefaultReposDirectory = "./repos"
 var DHTRepoPrefix protocol.ID = "/repo"
 var DHTLeaderPrefix protocol.ID = "/leader"
 
-var RepositoryReplicationFactor = 4
+var RepositoryReplicationFactor = 3
