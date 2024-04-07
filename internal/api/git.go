@@ -364,7 +364,7 @@ func (s *RepositoryService) getLeaderFromRepoPeers(ctx context.Context, repoName
 				logger.Warnf("Failed to get peer address to get current leader. Error: %v", err)
 				continue
 			}
-			grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 1*time.Second)
+			grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer grpcCancel()
 			conn, err := grpc.DialContext(grpcCtx, addresses.GrpcAddress, grpc.WithInsecure(), grpc.WithBlock())
 			if err != nil {
