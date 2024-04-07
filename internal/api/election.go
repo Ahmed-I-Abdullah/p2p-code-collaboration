@@ -132,7 +132,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 
 	for _, p := range dhtRecord.PeerIDs {
 		if p != s.Peer.Host.ID() {
-			addresses, err := util.GetPeerAdressesFromId(p, s.Peer)
+			addresses, err := util.GetPeerAdressesFromID(p, s.Peer)
 			if err != nil {
 				logger.Debugf("Failed to get addresses for peer with ID %s for leader election. Error: %v", p.String(), err)
 			} else {
@@ -284,7 +284,7 @@ func (s *ElectionService) checkLeaderAlive(ctx context.Context, repoName string)
 		return "", err
 	}
 
-	peerAddress, err := util.GetPeerAdressesFromId(leaderID, s.Peer)
+	peerAddress, err := util.GetPeerAdressesFromID(leaderID, s.Peer)
 
 	if err != nil {
 		return "", err
