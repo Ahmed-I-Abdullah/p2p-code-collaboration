@@ -474,6 +474,7 @@ func (s *RepositoryService) getPeerAdressesFromId(peerID peer.ID) (*p2p.PeerAddr
 	}
 
 	return &p2p.PeerAddresses{
+		ID:          peerID,
 		GitAddress:  fmt.Sprintf("git://%s:%d", ipAddress, peerInfo.GitDaemonPort),
 		GrpcAddress: fmt.Sprintf("%s:%s", peerAddress, peerInfo.GrpcPort),
 	}, nil

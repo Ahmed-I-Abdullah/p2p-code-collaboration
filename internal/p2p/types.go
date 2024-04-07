@@ -8,6 +8,7 @@ type PeerInfo struct {
 }
 
 type PeerAddresses struct {
+	ID          peer.ID
 	GrpcAddress string
 	GitAddress  string
 }

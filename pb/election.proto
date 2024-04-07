@@ -6,6 +6,7 @@ option go_package = "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/pb";
 service Election {
     rpc Election(ElectionRequest) returns (ElectionResponse);
     rpc LeaderAnnouncement(LeaderAnnouncementRequest) returns (LeaderAnnouncementResponse);
+    rpc GetCurrentLeader(CurrentLeaderRequest) returns (CurrentLeaderResponse);
 }
 
 enum ElectionType {
@@ -31,3 +32,12 @@ message LeaderAnnouncementRequest {
 }
 
 message LeaderAnnouncementResponse {}
+
+
+message CurrentLeaderRequest {
+  string repo_name = 1;
+}
+
+message CurrentLeaderResponse {
+  string leader_id = 1;
+}

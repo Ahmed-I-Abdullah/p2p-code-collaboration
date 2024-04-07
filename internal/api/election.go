@@ -2,11 +2,11 @@ package api
 
 import (
 	"context"
-	"sort"
+	"fmt"
+	"sync"
 	"time"
 
-	"fmt"
-
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
 	util "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/utils"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/utils/dhtutil"
@@ -17,228 +17,224 @@ import (
 
 type ElectionService struct {
 	pb.UnimplementedElectionServer
-	Peer *p2p.Peer
+	Peer              *p2p.Peer
+	electionInProcess map[string]bool
+	mu                sync.Mutex
 }
 
-type PeerInformation struct {
-	ID      peer.ID
-	Address string
-}
+func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentLeaderRequest) (*pb.CurrentLeaderResponse, error) {
+	s.mu.Lock()
+	electionInProgress, ok := s.electionInProcess[req.RepoName]
+	s.mu.Unlock()
 
-type ElectionState struct {
-	Leader     string
-	InElection bool
-}
+	if electionInProgress {
+		return nil, fmt.Errorf("Cannot get leader. Election in progress for repository %s", req.RepoName)
+	}
 
-var repoElectionState map[string]ElectionState = make(map[string]ElectionState)
-var leaderAnnouncementCh = make(chan *pb.LeaderAnnouncementRequest)
+	if !ok {
+		return nil, fmt.Errorf("No election in progress or previous leader for repository %s", req.RepoName)
+	}
 
-// func init() {
-// 	repoElectionState = make(map[string]ElectionState)
-// }
-
-func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest) (*pb.ElectionResponse, error) {
-	repoName := req.RepoName
-	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.RepoName)
+	leader, err := s.checkLeaderAlive(req.RepoName)
 
 	if err != nil {
-		return nil, err
+		// Start a new election if current leader is found to be not alive
+		leaderCh := make(chan string, 1)
+		go s.startElection(req.RepoName, leaderCh)
+
+		select {
+		case leader = <-leaderCh:
+			return &pb.CurrentLeaderResponse{LeaderId: leader}, nil
+		case <-time.After(30 * time.Second):
+			return nil, fmt.Errorf("Leader election failed for repository %s", req.RepoName)
+		}
 	}
 
-	peerInformations := make([]PeerInformation, len(repo.PeerIDs))
+	return &pb.CurrentLeaderResponse{LeaderId: leader}, nil
+}
 
-	for i := range repo.PeerIDs {
-		peerID := repo.PeerIDs[i]
-		peerInfo := PeerInformation{}
-		peerInfo.ID = peerID
-		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
-		peerAddress := peerAddresses[0]
-		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
+func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest) (*pb.ElectionResponse, error) {
+	// Check for ongoing election
+	s.mu.Lock()
+	if _, ok := s.electionInProcess[req.RepoName]; ok {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("election in progress")
+	}
+	// Set flag for ongoing election
+	s.electionInProcess[req.RepoName] = true
+	s.mu.Unlock()
 
+	// Spawning a new goroutine for election process
+	electionResult := make(chan string, 1)
+	go s.startElection(req.RepoName, electionResult)
+
+	select {
+	case leader := <-electionResult:
+		return &pb.ElectionResponse{NewLeaderId: leader}, nil
+	case <-time.After(30 * time.Second):
+		return nil, fmt.Errorf("timeout, election took too long")
+	}
+}
+
+func (s *ElectionService) startElection(repoName string, electionResult chan<- string) {
+	defer func() {
+		// Clean up flag after election
+		s.mu.Lock()
+		delete(s.electionInProcess, repoName)
+		s.mu.Unlock()
+	}()
+
+	dhtRecord, err := dhtutil.GetRepoInDHT(context.Background(), s.Peer, repoName)
+	if err != nil {
+		return
+	}
+
+	allPeerAddresses := make(map[string]*p2p.PeerAddresses)
+
+	for _, p := range dhtRecord.PeerIDs {
+		addresses, err := util.GetPeerAdressesFromId(p, s.Peer)
 		if err != nil {
-			logger.Warnf("Failed to get IP Address of peer %s in initiate election function", peerID)
-			continue
+			logger.Errorf("Failed to get addresses for peer with ID %s for leader election. Error: %v", p.String(), err)
 		}
+		allPeerAddresses[p.String()] = addresses
+	}
 
-		peerPorts, err := s.Peer.GetPeerPortsFromDB(peerID)
+	var highIdPeers []*p2p.PeerAddresses
+	for _, p := range dhtRecord.InSyncReplicas {
+		if p.String() > s.Peer.Host.ID().String() {
+			if addresses, exists := allPeerAddresses[p.String()]; exists {
+				highIdPeers = append(highIdPeers, addresses)
+			}
+		}
+	}
 
-		if err != nil {
-			logger.Warnf("Failed to get peer ports for peer: %s", peerID)
-			peerPorts, err = s.Peer.GetPeerPortsDirectly(peerID)
+	if len(highIdPeers) == 0 {
+		// If no higher ID peers, this node becomes the leader.
+		electionResult <- s.Peer.Host.ID().Pretty()
+		return
+	}
+
+	electionCh := make(chan string, len(highIdPeers))
+
+	// Send election messages to peers with higher IDs.
+	for _, p := range highIdPeers {
+		go s.contactPeerForElection(p, repoName, electionCh)
+	}
+
+	leader := ""
+	for i := 0; i < len(highIdPeers); i++ {
+		select {
+		case peerId := <-electionCh:
+			if peerId != "" {
+				leader = peerId
+			}
+		case <-time.After(5 * time.Second): // Timeout if no message received within 5 seconds
+			break
+		}
+	}
+
+	if leader == "" {
+		// If no leader is elected, then current node is the leader
+		leader = s.Peer.Host.ID().String()
+	}
+
+	// Store the new leader for the repository in badgerDB
+	err = database.Put([]byte(getDBLeaderKey(repoName)), []byte(leader))
+	if err != nil {
+		logger.Errorf("Error in storing leader ID for repo: %s at peer.. Error: %v", repoName, s.Peer.Host.ID().String(), err)
+	}
+
+	s.announceLeader(repoName, leader, allPeerAddresses)
+	electionResult <- leader
+}
+
+func (s *ElectionService) announceLeader(repoName string, leader string, peers map[string]*p2p.PeerAddresses) {
+	for _, peerAddress := range peers {
+		if peerAddress.ID.Pretty() != leader {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, err := grpc.DialContext(ctx, peerAddress.GrpcAddress, grpc.WithInsecure())
 			if err != nil {
-				logger.Warnf("Failed to get peer ports directly: %s", peerID)
 				continue
 			}
+			client := pb.NewElectionClient(conn)
+			client.LeaderAnnouncement(ctx, &pb.LeaderAnnouncementRequest{
+				LeaderId: leader,
+				RepoName: repoName,
+			})
+			conn.Close()
 		}
-
-		peerInfo.Address = fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
-		peerInformations[i] = peerInfo
 	}
+}
 
-	// Sort peers in descending order of ID
-	sort.Slice(peerInformations, func(i, j int) bool {
-		return peerInformations[i].ID > peerInformations[j].ID
+func (s *ElectionService) contactPeerForElection(addresses *p2p.PeerAddresses, repoName string, ch chan<- string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, addresses.GrpcAddress, grpc.WithInsecure())
+
+	if err != nil {
+		ch <- ""
+		return
+	}
+	defer conn.Close()
+
+	client := pb.NewElectionClient(conn)
+	resp, err := client.Election(ctx, &pb.ElectionRequest{
+		RepoName: repoName,
+		NodeId:   s.Peer.Host.ID().Pretty(),
 	})
 
-	// I am the boss, will announce leader to everyone
-	if peerInformations[0].ID == s.Peer.Host.ID() {
-		for _, peerInfo := range peerInformations {
-			go func(peerAddr string) {
-				_, err := s.sendLeaderAnnouncement(ctx, peerInfo, repoName, s.Peer.Host.ID().String())
-
-				if err != nil {
-					logger.Errorf("Failed to announce leader to peer %s: %v", peerAddr, err)
-				}
-			}(peerInfo.Address)
-		}
-
-		// Update map to reflect leader
-		repoElectionState[repoName] = ElectionState{
-			Leader:     s.Peer.Host.ID().String(),
-			InElection: false,
-		}
-
+	if err != nil || resp.NewLeaderId == "" {
+		ch <- ""
+	} else {
+		ch <- resp.NewLeaderId
 	}
-
-	// Check if I am the bully
-	if isNodeBully(s.Peer.Host.ID().String(), req.GetNodeId()) {
-		fmt.Println("I am the bully")
-		bully := s.Peer.Host.ID().String()
-
-		// Update the map to indicate participation in the election
-		state := ElectionState{
-			Leader:     "",
-			InElection: true,
-		}
-		if _, ok := repoElectionState[repoName]; !ok {
-			repoElectionState[repoName] = state
-		} else {
-			existingState := repoElectionState[repoName]
-			existingState.InElection = true
-			repoElectionState[repoName] = existingState
-		}
-
-		for _, peerInfo := range peerInformations {
-			if peerInfo.ID.String() > bully {
-				// Launch RPC call in a goroutine
-				go func(peerAddr string) {
-					resp, err := s.initiateElectionRPC(ctx, peerInfo, bully, repoName)
-
-					if err != nil {
-						logger.Errorf("Failed to initiate election on peer %s: %v", peerAddr, err)
-						return
-					}
-
-					if resp.Type == pb.ElectionType_BULLY.String() {
-						// Bigger guys are alive, I am no longer participating :(
-						existingState := repoElectionState[repoName]
-						existingState.InElection = false
-						repoElectionState[repoName] = existingState
-					}
-				}(peerInfo.Address)
-			}
-		}
-
-		timeout := time.After(5 * time.Second)
-
-		for {
-			select {
-			case leaderAnnouncement := <-leaderAnnouncementCh:
-				// Check if the leader announcement is for the current repository
-				if leaderAnnouncement.RepoName == repoName {
-					leaderID := leaderAnnouncement.LeaderId
-					fmt.Printf("Leader announced for repository %s: %s\n", repoName, leaderID)
-					return &pb.ElectionResponse{
-						Type:        pb.ElectionType_SUCCESS.String(),
-						NewLeaderId: leaderID,
-					}, nil
-				}
-
-			// need to handle this better because client won't wait lol
-			case <-timeout:
-				fmt.Println("Leader announcement not received within timeout, reinitiating election...")
-				return s.Election(ctx, req)
-			}
-		}
-	}
-
-	return &pb.ElectionResponse{Type: pb.ElectionType_OTHER.String()}, nil
 }
 
 func (s *ElectionService) LeaderAnnouncement(ctx context.Context, req *pb.LeaderAnnouncementRequest) (*pb.LeaderAnnouncementResponse, error) {
-	repoName := req.RepoName
-	state := ElectionState{
-		Leader:     req.LeaderId,
-		InElection: false,
-	}
+	s.mu.Lock()
+	s.electionInProcess[req.RepoName] = false
+	s.mu.Unlock()
 
-	repoElectionState[repoName] = state
-
-	leaderAnnouncementCh <- req
-
-	// Try storing the leader ID into DHT
-	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.RepoName)
-
+	// Store the new leader for the repository in badgerDB
+	err := database.Put([]byte(getDBLeaderKey(req.RepoName)), []byte(req.LeaderId))
 	if err != nil {
-		return nil, err
-	}
-
-	if repo.LeaderID.String() == req.LeaderId {
-		return &pb.LeaderAnnouncementResponse{}, nil
-	}
-
-	repo.LeaderID = peer.ID(req.LeaderId)
-
-	if err := dhtutil.StoreRepoInDHT(ctx, s.Peer, req.RepoName, *repo); err != nil {
-		return nil, err
+		logger.Errorf("Error in storing leader ID for repo: %s. Error: %v", req.RepoName, err)
 	}
 
 	return &pb.LeaderAnnouncementResponse{}, nil
 }
 
-func (s *ElectionService) initiateElectionRPC(ctx context.Context, peerInformation PeerInformation, bully string, repoName string) (*pb.ElectionResponse, error) {
-	conn, err := grpc.Dial(peerInformation.Address, grpc.WithInsecure(), grpc.WithBlock())
+func (s *ElectionService) checkLeaderAlive(repoName string) (string, error) {
+	messageKey := []byte(getDBLeaderKey(repoName))
+
+	// Retrieve current leader ID from BadgerDB
+	leaderIDData, err := database.Get(messageKey)
 	if err != nil {
-		return nil, err
+		// This error indicates that there is no leader saved in the database for the repo.
+		return "", err
+	}
+
+	stringLeaderID := string(leaderIDData)
+	leaderID := peer.ID(stringLeaderID)
+	peerAddress, err := util.GetPeerAdressesFromId(leaderID, s.Peer)
+
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	conn, err := grpc.DialContext(ctx, peerAddress.GrpcAddress, grpc.WithInsecure())
+	if err != nil {
+		return "", err
 	}
 	defer conn.Close()
 
-	client := pb.NewElectionClient(conn)
-
-	request := &pb.ElectionRequest{
-		RepoName: repoName,
-		NodeId:   bully,
-	}
-
-	resp, err := client.Election(ctx, request)
-	if err != nil {
-		return resp, err
-	}
-
-	if resp.Type == pb.ElectionType_BULLY.String() {
-		logger.Infof("Candidate %s, declared bully", &peerInformation.ID)
-	}
-
-	return resp, nil
+	return stringLeaderID, nil
 }
 
-func (s *ElectionService) sendLeaderAnnouncement(ctx context.Context, peerInfo PeerInformation, repoName string, leaderID string) (*pb.LeaderAnnouncementResponse, error) {
-	conn, err := grpc.Dial(peerInfo.Address, grpc.WithInsecure(), grpc.WithBlock())
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	client := pb.NewElectionClient(conn)
-
-	request := &pb.LeaderAnnouncementRequest{
-		RepoName: repoName,
-		LeaderId: leaderID,
-	}
-
-	return client.LeaderAnnouncement(ctx, request)
-}
-
-func isNodeBully(currentNodeId string, incomingNodeId string) bool {
-	return incomingNodeId < currentNodeId
+func getDBLeaderKey(repoName string) string {
+	return "leader:" + repoName
 }

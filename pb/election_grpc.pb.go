@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	Election_Election_FullMethodName           = "/api.Election/Election"
 	Election_LeaderAnnouncement_FullMethodName = "/api.Election/LeaderAnnouncement"
+	Election_GetCurrentLeader_FullMethodName   = "/api.Election/GetCurrentLeader"
 )
 
 // ElectionClient is the client API for Election service.
@@ -29,6 +30,7 @@ const (
 type ElectionClient interface {
 	Election(ctx context.Context, in *ElectionRequest, opts ...grpc.CallOption) (*ElectionResponse, error)
 	LeaderAnnouncement(ctx context.Context, in *LeaderAnnouncementRequest, opts ...grpc.CallOption) (*LeaderAnnouncementResponse, error)
+	GetCurrentLeader(ctx context.Context, in *CurrentLeaderRequest, opts ...grpc.CallOption) (*CurrentLeaderResponse, error)
 }
 
 type electionClient struct {
@@ -57,12 +59,22 @@ func (c *electionClient) LeaderAnnouncement(ctx context.Context, in *LeaderAnnou
 	return out, nil
 }
 
+func (c *electionClient) GetCurrentLeader(ctx context.Context, in *CurrentLeaderRequest, opts ...grpc.CallOption) (*CurrentLeaderResponse, error) {
+	out := new(CurrentLeaderResponse)
+	err := c.cc.Invoke(ctx, Election_GetCurrentLeader_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ElectionServer is the server API for Election service.
 // All implementations must embed UnimplementedElectionServer
 // for forward compatibility
 type ElectionServer interface {
 	Election(context.Context, *ElectionRequest) (*ElectionResponse, error)
 	LeaderAnnouncement(context.Context, *LeaderAnnouncementRequest) (*LeaderAnnouncementResponse, error)
+	GetCurrentLeader(context.Context, *CurrentLeaderRequest) (*CurrentLeaderResponse, error)
 	mustEmbedUnimplementedElectionServer()
 }
 
@@ -75,6 +87,9 @@ func (UnimplementedElectionServer) Election(context.Context, *ElectionRequest) (
 }
 func (UnimplementedElectionServer) LeaderAnnouncement(context.Context, *LeaderAnnouncementRequest) (*LeaderAnnouncementResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LeaderAnnouncement not implemented")
+}
+func (UnimplementedElectionServer) GetCurrentLeader(context.Context, *CurrentLeaderRequest) (*CurrentLeaderResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCurrentLeader not implemented")
 }
 func (UnimplementedElectionServer) mustEmbedUnimplementedElectionServer() {}
 
@@ -125,6 +140,24 @@ func _Election_LeaderAnnouncement_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Election_GetCurrentLeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CurrentLeaderRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ElectionServer).GetCurrentLeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Election_GetCurrentLeader_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ElectionServer).GetCurrentLeader(ctx, req.(*CurrentLeaderRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Election_ServiceDesc is the grpc.ServiceDesc for Election service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -139,6 +172,10 @@ var Election_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LeaderAnnouncement",
 			Handler:    _Election_LeaderAnnouncement_Handler,
+		},
+		{
+			MethodName: "GetCurrentLeader",
+			Handler:    _Election_GetCurrentLeader_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
