@@ -17,13 +17,18 @@ import (
 type ElectionService struct {
 	pb.UnimplementedElectionServer
 	Peer              *p2p.Peer
-	electionInProcess map[string]bool
+	ElectionInProcess map[string]bool
 	mu                sync.Mutex
+}
+
+func (s *ElectionService) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
+	logger.Debug("Received ping from client")
+	return &pb.PingResponse{}, nil
 }
 
 func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentLeaderRequest) (*pb.CurrentLeaderResponse, error) {
 	s.mu.Lock()
-	electionInProgress, ok := s.electionInProcess[req.RepoName]
+	electionInProgress, ok := s.ElectionInProcess[req.RepoName]
 	s.mu.Unlock()
 
 	if electionInProgress {
@@ -70,7 +75,7 @@ func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentL
 func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest) (*pb.ElectionResponse, error) {
 	// Check for ongoing election
 	s.mu.Lock()
-	if _, ok := s.electionInProcess[req.RepoName]; ok {
+	if _, ok := s.ElectionInProcess[req.RepoName]; ok {
 		s.mu.Unlock()
 		logger.Debugf("Election in progress for repository %s", req.RepoName)
 		return nil, fmt.Errorf("election in progress")
@@ -83,7 +88,7 @@ func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest)
 	}
 
 	// Set flag for ongoing election
-	s.electionInProcess[req.RepoName] = true
+	s.ElectionInProcess[req.RepoName] = true
 	s.mu.Unlock()
 
 	// Spawning a new goroutine for election process
@@ -104,7 +109,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 	defer func() {
 		// Clean up flag after election
 		s.mu.Lock()
-		delete(s.electionInProcess, repoName)
+		delete(s.ElectionInProcess, repoName)
 		s.mu.Unlock()
 	}()
 
@@ -158,7 +163,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 		}(p)
 	}
 
-	leader := ""
+	var leader string
 	for i := 0; i < len(highIdPeers); i++ {
 		select {
 		case peerId := <-electionCh:
@@ -182,7 +187,6 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 
 	// Store the new leader for the repository in DHT
 	leaderID, err := peer.Decode(leader)
-
 	if err != nil {
 		logger.Debugf("Error decoding leader ID: %v", err)
 		return
@@ -198,18 +202,20 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 		}
 	}
 
-	if err == nil {
-		if storedLeaderID != leaderID {
-			err = dhtutil.StoreLeaderInDHT(context.Background(), s.Peer, repoName, leaderID)
-			if err != nil {
-				logger.Debugf("Error storing leader in DHT: %v", err)
-				return
-			}
+	if err == nil && storedLeaderID != leaderID {
+		err = dhtutil.StoreLeaderInDHT(context.Background(), s.Peer, repoName, leaderID)
+		if err != nil {
+			logger.Debugf("Error storing leader in DHT: %v", err)
+			return
 		}
 	}
 
-	logger.Debugf("Announcing leader (%s) to other peers", leader)
-	s.announceLeader(repoName, leader, allPeerAddresses)
+	// If this node is the final leader, announce to other peers
+	if leader == s.Peer.Host.ID().String() {
+		logger.Debugf("Announcing leader (%s) to other peers", leader)
+		s.announceLeader(repoName, leader, allPeerAddresses)
+	}
+
 	electionResult <- leader
 }
 
@@ -258,7 +264,7 @@ func (s *ElectionService) contactPeerForElection(addresses *p2p.PeerAddresses, r
 
 func (s *ElectionService) LeaderAnnouncement(ctx context.Context, req *pb.LeaderAnnouncementRequest) (*pb.LeaderAnnouncementResponse, error) {
 	s.mu.Lock()
-	s.electionInProcess[req.RepoName] = false
+	s.ElectionInProcess[req.RepoName] = false
 	s.mu.Unlock()
 
 	return &pb.LeaderAnnouncementResponse{}, nil

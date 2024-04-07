@@ -290,16 +290,18 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(repo.InSyncReplicas), repo.InSyncReplicas),
 	}, nil
 }
+
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
 	storedLeaderID, err := dhtutil.GetLeaderFromDHT(context.Background(), s.Peer, req.Name)
 	if err == nil {
 		addresses, err := s.checkPeerAlive(ctx, storedLeaderID)
 		// If current leader alive, just return it
 		if err == nil {
+			logger.Debugf("Leader from DHT with ID %s is alive! Returning response", storedLeaderID.String())
 			return &pb.LeaderUrlResponse{
 				Success:        true,
 				Name:           req.Name,
-				GitRepoAddress: addresses.GitAddress,
+				GitRepoAddress: fmt.Sprintf("%s/%s", addresses.GitAddress, req.Name),
 				GrpcAddress:    addresses.GrpcAddress,
 			}, nil
 		}
@@ -444,17 +446,28 @@ func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (
 		RepoAddress: "",
 	}, fmt.Errorf("failed to get git address for any insync relplica")
 }
+
 func (s *RepositoryService) checkPeerAlive(ctx context.Context, peerID peer.ID) (*p2p.PeerAddresses, error) {
 	peerAddress, err := util.GetPeerAdressesFromId(peerID, s.Peer)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
-	defer cancel()
+
 	conn, err := grpc.DialContext(ctx, peerAddress.GrpcAddress, grpc.WithInsecure())
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
+
+	client := pb.NewElectionClient(conn)
+
+	pingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	pingReq := &pb.PingRequest{}
+	_, err = client.Ping(pingCtx, pingReq)
+	if err != nil {
+		return nil, err
+	}
+
 	return peerAddress, nil
 }

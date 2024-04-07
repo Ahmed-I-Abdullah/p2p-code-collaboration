@@ -20,7 +20,7 @@ func StartServer(ctx context.Context, peer *p2p.Peer, git *gitops.Git) error {
 	s := grpc.NewServer()
 
 	// Register git gRPC server and election gRPC server
-	electionService := &ElectionService{Peer: peer}
+	electionService := &ElectionService{Peer: peer, ElectionInProcess: make(map[string]bool)}
 	pb.RegisterElectionServer(s, electionService)
 	pb.RegisterRepositoryServer(s, &RepositoryService{Peer: peer, Git: git, PeerElectionService: electionService})
 

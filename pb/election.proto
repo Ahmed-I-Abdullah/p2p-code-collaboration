@@ -7,6 +7,7 @@ service Election {
     rpc Election(ElectionRequest) returns (ElectionResponse);
     rpc LeaderAnnouncement(LeaderAnnouncementRequest) returns (LeaderAnnouncementResponse);
     rpc GetCurrentLeader(CurrentLeaderRequest) returns (CurrentLeaderResponse);
+    rpc Ping(PingRequest) returns (PingResponse);
 }
 
 enum ElectionType {
@@ -41,3 +42,7 @@ message CurrentLeaderRequest {
 message CurrentLeaderResponse {
   string leader_id = 1;
 }
+
+message PingRequest {}
+
+message PingResponse {}
