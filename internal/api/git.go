@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	constansts "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
@@ -26,6 +27,8 @@ type RepositoryService struct {
 	Peer                *p2p.Peer
 	Git                 *gitops.Git
 	PeerElectionService *ElectionService
+	PushInProgress      map[string]bool
+	mu                  sync.Mutex
 }
 
 func NewRepositoryService(peer *p2p.Peer, git *gitops.Git, electionService *ElectionService) *RepositoryService {
@@ -33,11 +36,42 @@ func NewRepositoryService(peer *p2p.Peer, git *gitops.Git, electionService *Elec
 		Peer:                peer,
 		Git:                 git,
 		PeerElectionService: electionService,
+		PushInProgress:      make(map[string]bool),
 	}
 }
 
 func Init() {
 	log.SetLogLevel("grpcService", "debug")
+}
+
+func (s *RepositoryService) AcquireLock(ctx context.Context, req *pb.AcquireLockRequest) (*pb.AcquireLockResponse, error) {
+	s.mu.Lock()
+	anotherPushInProgress, ok := s.PushInProgress[req.RepoName]
+	s.mu.Unlock()
+
+	if anotherPushInProgress {
+		logger.Warnf("AcquireLock: Another push in progress for repository %s. Rejecting request.", req.RepoName)
+		return &pb.AcquireLockResponse{
+			Ok: false,
+		}, nil
+	}
+
+	if !ok {
+		logger.Debugf("No push in progress for repository %s. Accepting lock acquire request.", req.RepoName)
+		s.mu.Lock()
+		s.PushInProgress[req.RepoName] = true
+		s.mu.Unlock()
+	}
+
+	return &pb.AcquireLockResponse{
+		Ok: true,
+	}, nil
+}
+
+func (s *RepositoryService) ReleaseRepositoryLock(repoName string) {
+	s.mu.Lock()
+	delete(s.PushInProgress, repoName)
+	s.mu.Unlock()
 }
 
 func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
@@ -255,6 +289,8 @@ func (s *RepositoryService) GetPeerPorts(ctx context.Context, p peer.ID, secondA
 }
 
 func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.NotifyPushCompletionRequest) (*pb.NotifyPushCompletionResponse, error) {
+	defer s.ReleaseRepositoryLock(req.Name)
+
 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
 		return nil, err
