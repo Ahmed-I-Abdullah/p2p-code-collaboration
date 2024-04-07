@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	constansts "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/constants"
@@ -254,60 +255,99 @@ func (s *RepositoryService) GetPeerPorts(ctx context.Context, p peer.ID, secondA
 	return peerPorts, err
 }
 
+// NotifyPushCompletion pushes the new repository changes to all the other peers and updates the ISR list with the ids of the successful peers
 func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.NotifyPushCompletionRequest) (*pb.NotifyPushCompletionResponse, error) {
+	logger.Infof("Starting NotifyPushCompletion for repository: %s", req.Name)
+
 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
+		logger.Errorf("Failed to get repository %s from DHT: %v", req.Name, err)
 		return nil, err
 	}
-	// Clear the inSyncReplicas
-	repo.InSyncReplicas = make([]peer.ID, 0)
-	// Add the current peer (Leader) ID to inSyncReplicas
-	repo.InSyncReplicas = append(repo.InSyncReplicas, s.Peer.Host.ID())
-	// Update the version if needed
+
+	// Always add the leader in the ISR list
+	repo.InSyncReplicas = []peer.ID{s.Peer.Host.ID()}
 	repo.Version++
-	// Slice to keep track of successful peers
-	successfulPeers := make([]peer.ID, 0)
-	// Iterate over peers in repo.PeerIDs and make pull requests
+
+	successfulPeersCh := make(chan peer.ID)
+	var wg sync.WaitGroup
+
+	// waitgroup with the number of peers to track goroutines completions
+	wg.Add(len(repo.PeerIDs))
+
 	for _, peerID := range repo.PeerIDs {
 		if peerID == s.Peer.Host.ID() {
+			wg.Done()
 			continue
 		}
-		// Fetch peer information
-		peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
-		peerAddress := peerAddresses[0]
-		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
-		if err != nil {
-			continue
-		}
-		peerInfo, err := s.Peer.GetPeerPortsFromDB(peerID)
-		if err != nil {
-			logger.Warnf("failed to get peer ports for peer: %s", peerID)
-		}
-		peerInfo, err = s.Peer.GetPeerPortsDirectly(peerID)
-		if err != nil {
-			logger.Warnf("failed to get peer ports directly: %s", peerID)
-			continue
-		}
-		targetGitAddress := fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name)
-		err = s.Git.PushToPeer(req.Name, targetGitAddress)
-		if err != nil {
-			logger.Warnf("failed to push changes to peer: %s. Error: %v", peerID, err)
-			continue
-		}
-		// If pull request is successful, add peer to successful peers slice
-		successfulPeers = append(successfulPeers, peerID)
+
+		go func(peerID peer.ID) {
+			defer wg.Done()
+			// if context is done, exit the goroutine
+			select {
+			case <-ctx.Done():
+				logger.Warnf("Context cancelled or timed-out for peer: %s", peerID)
+				return
+			default:
+			}
+
+			if err := s.pushToPeer(ctx, req.Name, peerID); err == nil {
+				logger.Debugf("Successfully pushed changes to peer: %s", peerID)
+				successfulPeersCh <- peerID
+			} else {
+				logger.Warnf("Failed to push changes to peer: %s. Error: %v", peerID, err)
+			}
+		}(peerID)
 	}
-	repo.InSyncReplicas = append(repo.InSyncReplicas, successfulPeers...)
+
+	go func() {
+		// waiting for all the goroutines to finish
+		wg.Wait()
+		// closing the channel as no more data will be pushed once everyone exits
+		close(successfulPeersCh)
+	}()
+
+	for peerID := range successfulPeersCh {
+		logger.Debugf("Successfully received successful peer: %s", peerID)
+		repo.InSyncReplicas = append(repo.InSyncReplicas, peerID)
+	}
+
+	logger.Debugf("Finished processing successful peers")
+
 	if err := dhtutil.StoreRepoInDHT(ctx, s.Peer, req.Name, *repo); err != nil {
+		logger.Errorf("Failed to store repository details %s in DHT: %v", req.Name, err)
 		return &pb.NotifyPushCompletionResponse{
 			Success: false,
 			Message: "Failed to store repository details in DHT",
 		}, err
 	}
+
+	logger.Infof("Successfully stored repository details %s in DHT. ISR: %v", req.Name, repo.InSyncReplicas)
+
 	return &pb.NotifyPushCompletionResponse{
 		Success: true,
 		Message: fmt.Sprintf("%d peers have successfully notified about the push change. ISR: %v", len(repo.InSyncReplicas), repo.InSyncReplicas),
 	}, nil
+}
+
+func (s *RepositoryService) pushToPeer(ctx context.Context, repoName string, peerID peer.ID) error {
+	logger.Debugf("Starting push to peer: %s", peerID)
+
+	peerAddress, err := s.getPeerAdressesFromId(peerID)
+	if err != nil {
+		logger.Warnf("Failed to get peer addresses for peer: %s", peerID)
+		return err
+	}
+
+	targetGitAddress := fmt.Sprintf("%s/%s", peerAddress.GitAddress, repoName)
+	if err := s.Git.PushToPeer(repoName, targetGitAddress); err != nil {
+		logger.Warnf("Failed to push changes to peer: %s. Error: %v", peerID, err)
+		return err
+	}
+
+	logger.Debugf("Successfully pushed changes to peer: %s", peerID)
+
+	return nil
 }
 
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
