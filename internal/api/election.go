@@ -21,6 +21,13 @@ type ElectionService struct {
 	mu                sync.Mutex
 }
 
+func NewElectionService(peer *p2p.Peer) *ElectionService {
+	return &ElectionService{
+		Peer:              peer,
+		ElectionInProcess: make(map[string]bool),
+	}
+}
+
 func (s *ElectionService) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
 	logger.Debug("Received ping from client")
 	return &pb.PingResponse{}, nil

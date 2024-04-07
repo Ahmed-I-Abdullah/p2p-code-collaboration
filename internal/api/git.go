@@ -28,6 +28,14 @@ type RepositoryService struct {
 	PeerElectionService *ElectionService
 }
 
+func NewRepositoryService(peer *p2p.Peer, git *gitops.Git, electionService *ElectionService) *RepositoryService {
+	return &RepositoryService{
+		Peer:                peer,
+		Git:                 git,
+		PeerElectionService: electionService,
+	}
+}
+
 func Init() {
 	log.SetLogLevel("grpcService", "debug")
 }
@@ -178,12 +186,13 @@ func (s *RepositoryService) initPeers(ctx context.Context, req *pb.RepoInitReque
 	return successfulPeers, failedPeers, errs
 }
 
+// signalCreateNewRepository initiates repository creation process on a specific peer
 func (s *RepositoryService) signalCreateNewRepository(ctx context.Context, p peer.ID, repoName string) (bool, error) {
-	// there is a chance that the peer port is wrong and needs to be stored again. In this case we retry peer
-	// retrieval by contacting the peer directly
+	// Try creating a repository on peer by getting ports from DB and contacting them via gRPC
 	return s.signalCreateNewRepositoryRecursive(ctx, p, repoName, false)
 }
 
+// signalCreateNewRepositoryRecursive recursively tries to create a new repository on the specified peer
 func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Context, p peer.ID, repoName string, secondAttempt bool) (bool, error) {
 	if p == s.Peer.Host.ID() {
 		logger.Info("Initializing repository on current host")
@@ -193,11 +202,48 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 		}
 		return true, nil
 	}
+
 	peerAddresses := s.Peer.Host.Peerstore().Addrs(p)
 	if len(peerAddresses) == 0 {
 		return false, fmt.Errorf("no known addresses for peer %s", p)
 	}
 	peerAddress := peerAddresses[0]
+
+	peerPorts, err := s.GetPeerPorts(ctx, p, secondAttempt)
+	if err != nil {
+		return false, fmt.Errorf("failed to get peer ports: %w", err)
+	}
+
+	ipAddress, err := util.ExtractIPAddr(peerAddress.String())
+	if err != nil {
+		return false, fmt.Errorf("failed to get peer IP Address: %w", err)
+	}
+
+	target := fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
+	logger.Infof("Connecting to peer %s at address %s for gRPC communication\n", p, target)
+
+	conn, err := grpc.DialContext(ctx, target, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		if secondAttempt {
+			return false, fmt.Errorf("failed to connect to peer %s at address %s: %w", p, target, err)
+		}
+		logger.Warnf("Failed to connect to peer %s at address %s. Attempting once more by grabbing Peer ports directly!", p, target)
+		return s.signalCreateNewRepositoryRecursive(ctx, p, repoName, true)
+	}
+	defer conn.Close()
+
+	logger.Infof("Connected to gRPC server of peer %s.", p)
+	c := pb.NewRepositoryClient(conn)
+
+	_, err = c.Init(ctx, &pb.RepoInitRequest{Name: repoName, FromCli: false})
+	if err != nil {
+		return false, fmt.Errorf("failed to initialize repository: %w", err)
+	}
+	return true, nil
+}
+
+// GetPeerPorts retrieves peer ports either from the embedded database (BadgerDB) or directly via stream handlers
+func (s *RepositoryService) GetPeerPorts(ctx context.Context, p peer.ID, secondAttempt bool) (*p2p.PeerInfo, error) {
 	var peerPorts *p2p.PeerInfo
 	var err error
 	if !secondAttempt {
@@ -205,36 +251,9 @@ func (s *RepositoryService) signalCreateNewRepositoryRecursive(ctx context.Conte
 	} else {
 		peerPorts, err = s.Peer.GetPeerPortsDirectly(p)
 	}
-	if err != nil {
-		return false, fmt.Errorf("failed to get peer ports: %w", err)
-	}
-	ipAddress, err := util.ExtractIPAddr(peerAddress.String())
-	if err != nil {
-		return false, fmt.Errorf("failed to get peer IP Adress: %w", err)
-	}
-	target := fmt.Sprintf("%s:%d", ipAddress, peerPorts.GrpcPort)
-	logger.Infof("Connecting to peer %s at address %s for gRPC communication\n", p, target)
-	grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer grpcCancel()
-	conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
-	if err != nil {
-		if secondAttempt {
-			return false, fmt.Errorf("failed to get peer ports: %w", err)
-		}
-		logger.Warnf("failed to connect to peer %s at address %s. Will attempt once more by grabbing Peer ports directly!", p, target)
-		return s.signalCreateNewRepositoryRecursive(ctx, p, repoName, true)
-	}
-	defer conn.Close()
-	logger.Infof("Connected to gRPC server of peer %s.", p)
-	c := pb.NewRepositoryClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err = c.Init(ctx, &pb.RepoInitRequest{Name: repoName, FromCli: false})
-	if err != nil {
-		return false, fmt.Errorf("failed to initialize repository: %w", err)
-	}
-	return true, nil
+	return peerPorts, err
 }
+
 func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.NotifyPushCompletionRequest) (*pb.NotifyPushCompletionResponse, error) {
 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
@@ -328,6 +347,7 @@ func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlR
 		GrpcAddress:    newLeaderAddresses.GrpcAddress,
 	}, nil
 }
+
 func (s *RepositoryService) getLeaderFromRepoPeers(ctx context.Context, repoName string, failedLeader peer.ID) (*pb.CurrentLeaderResponse, error) {
 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, repoName)
 	if err != nil {
@@ -398,6 +418,7 @@ func (s *RepositoryService) getPeerAdressesFromId(peerID peer.ID) (*p2p.PeerAddr
 		GrpcAddress: fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort),
 	}, nil
 }
+
 func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (*pb.RepoPullResponse, error) {
 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
 	if err != nil {
