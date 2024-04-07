@@ -16,6 +16,5 @@ type PeerAddresses struct {
 type RepositoryPeers struct {
 	PeerIDs        []peer.ID `json:"peerIDs"`
 	InSyncReplicas []peer.ID `json:"inSyncReplicas"`
-	LeaderID       peer.ID   `json:"leaderID"`
 	Version        int       `json:"version"`
 }

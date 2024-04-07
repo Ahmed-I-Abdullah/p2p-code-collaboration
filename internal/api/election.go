@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
 	util "github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/utils"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/utils/dhtutil"
@@ -32,19 +31,26 @@ func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentL
 	}
 
 	if !ok {
-		return nil, fmt.Errorf("No election in progress or previous leader for repository %s", req.RepoName)
-	}
-
-	leader, err := s.checkLeaderAlive(req.RepoName)
-
-	if err != nil {
-		// Start a new election if current leader is found to be not alive
-		leaderCh := make(chan string, 1)
-		go s.startElection(req.RepoName, leaderCh)
+		// Start a new election if no election data exists for the given repository
+		electionResult := make(chan string, 1)
+		go s.startElection(req.RepoName, electionResult)
 
 		select {
-		case leader = <-leaderCh:
-			return &pb.CurrentLeaderResponse{LeaderId: leader}, nil
+		case newLeader := <-electionResult:
+			return &pb.CurrentLeaderResponse{LeaderId: newLeader}, nil
+		case <-time.After(30 * time.Second):
+			return nil, fmt.Errorf("Leader election failed for repository %s", req.RepoName)
+		}
+	}
+
+	leader, err := s.checkLeaderAlive(ctx, req.RepoName)
+	if err != nil {
+		// Start a new election if current leader is found to be not alive
+		electionResult := make(chan string, 1)
+		go s.startElection(req.RepoName, electionResult)
+
+		select {
+		case leader = <-electionResult:
 		case <-time.After(30 * time.Second):
 			return nil, fmt.Errorf("Leader election failed for repository %s", req.RepoName)
 		}
@@ -60,6 +66,12 @@ func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest)
 		s.mu.Unlock()
 		return nil, fmt.Errorf("election in progress")
 	}
+
+	// If I have a lower id then don't participate in the election
+	if s.Peer.Host.ID().String() < req.NodeId {
+		return &pb.ElectionResponse{Type: pb.ElectionType_OTHER.String()}, nil
+	}
+
 	// Set flag for ongoing election
 	s.electionInProcess[req.RepoName] = true
 	s.mu.Unlock()
@@ -92,11 +104,13 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 	allPeerAddresses := make(map[string]*p2p.PeerAddresses)
 
 	for _, p := range dhtRecord.PeerIDs {
-		addresses, err := util.GetPeerAdressesFromId(p, s.Peer)
-		if err != nil {
-			logger.Errorf("Failed to get addresses for peer with ID %s for leader election. Error: %v", p.String(), err)
+		if p != s.Peer.Host.ID() {
+			addresses, err := util.GetPeerAdressesFromId(p, s.Peer)
+			if err != nil {
+				logger.Errorf("Failed to get addresses for peer with ID %s for leader election. Error: %v", p.String(), err)
+			}
+			allPeerAddresses[p.String()] = addresses
 		}
-		allPeerAddresses[p.String()] = addresses
 	}
 
 	var highIdPeers []*p2p.PeerAddresses
@@ -109,7 +123,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 	}
 
 	if len(highIdPeers) == 0 {
-		// If no higher ID peers, this node becomes the leader.
+		// If no higher ID peers, I am the big boss
 		electionResult <- s.Peer.Host.ID().Pretty()
 		return
 	}
@@ -138,10 +152,28 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 		leader = s.Peer.Host.ID().String()
 	}
 
-	// Store the new leader for the repository in badgerDB
-	err = database.Put([]byte(getDBLeaderKey(repoName)), []byte(leader))
+	// Store the new leader for the repository in DHT
+	leaderID, err := peer.Decode(leader)
+
 	if err != nil {
-		logger.Errorf("Error in storing leader ID for repo: %s at peer.. Error: %v", repoName, s.Peer.Host.ID().String(), err)
+		return
+	}
+
+	storedLeaderID, err := dhtutil.GetLeaderFromDHT(context.Background(), s.Peer, repoName)
+	if err != nil {
+		err = dhtutil.StoreLeaderInDHT(context.Background(), s.Peer, repoName, leaderID)
+		if err != nil {
+			return
+		}
+	}
+
+	if err == nil {
+		if storedLeaderID != leaderID {
+			err = dhtutil.StoreLeaderInDHT(context.Background(), s.Peer, repoName, leaderID)
+			if err != nil {
+				return
+			}
+		}
 	}
 
 	s.announceLeader(repoName, leader, allPeerAddresses)
@@ -196,27 +228,16 @@ func (s *ElectionService) LeaderAnnouncement(ctx context.Context, req *pb.Leader
 	s.electionInProcess[req.RepoName] = false
 	s.mu.Unlock()
 
-	// Store the new leader for the repository in badgerDB
-	err := database.Put([]byte(getDBLeaderKey(req.RepoName)), []byte(req.LeaderId))
-	if err != nil {
-		logger.Errorf("Error in storing leader ID for repo: %s. Error: %v", req.RepoName, err)
-	}
-
 	return &pb.LeaderAnnouncementResponse{}, nil
 }
 
-func (s *ElectionService) checkLeaderAlive(repoName string) (string, error) {
-	messageKey := []byte(getDBLeaderKey(repoName))
-
-	// Retrieve current leader ID from BadgerDB
-	leaderIDData, err := database.Get(messageKey)
+func (s *ElectionService) checkLeaderAlive(ctx context.Context, repoName string) (string, error) {
+	leaderID, err := dhtutil.GetLeaderFromDHT(ctx, s.Peer, repoName)
 	if err != nil {
 		// This error indicates that there is no leader saved in the database for the repo.
 		return "", err
 	}
 
-	stringLeaderID := string(leaderIDData)
-	leaderID := peer.ID(stringLeaderID)
 	peerAddress, err := util.GetPeerAdressesFromId(leaderID, s.Peer)
 
 	if err != nil {
@@ -232,9 +253,5 @@ func (s *ElectionService) checkLeaderAlive(repoName string) (string, error) {
 	}
 	defer conn.Close()
 
-	return stringLeaderID, nil
-}
-
-func getDBLeaderKey(repoName string) string {
-	return "leader:" + repoName
+	return leaderID.String(), nil
 }

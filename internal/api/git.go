@@ -22,16 +22,16 @@ var logger = log.Logger("grpcService")
 
 type RepositoryService struct {
 	pb.UnimplementedRepositoryServer
-	Peer *p2p.Peer
-	Git  *gitops.Git
+	Peer                *p2p.Peer
+	Git                 *gitops.Git
+	PeerElectionService *ElectionService
 }
 
 func Init() {
-	log.SetLogLevel("grpcService", "info")
+	log.SetLogLevel("grpcService", "debug")
 }
 
 func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (*pb.RepoInitResponse, error) {
-	log.SetLogLevel("grpcService", "info")
 	replicationFactor := 2
 	logger.Info("Received request to initialize a repository")
 
@@ -108,9 +108,10 @@ func (s *RepositoryService) Init(ctx context.Context, req *pb.RepoInitRequest) (
 		repo := p2p.RepositoryPeers{
 			PeerIDs:        repoPeers,
 			InSyncReplicas: successfulPeers,
-			LeaderID:       successfulPeers[0],
 			Version:        1,
 		}
+
+		logger.Debugf("Stroing repo in DHT: %v", repo)
 
 		if err := dhtutil.StoreRepoInDHT(ctx, s.Peer, req.Name, repo); err != nil {
 			return &pb.RepoInitResponse{
@@ -286,166 +287,89 @@ func (s *RepositoryService) NotifyPushCompletion(ctx context.Context, req *pb.No
 	}, nil
 }
 
-// func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
-// 	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	// Make a copy of InSyncReplicas
-// 	sortedReplicas := make([]peer.ID, len(repo.InSyncReplicas))
-// 	copy(sortedReplicas, repo.InSyncReplicas)
-
-// 	// Sort the copy in descending order
-// 	sort.Slice(sortedReplicas, func(i, j int) bool {
-// 		return sortedReplicas[i] > sortedReplicas[j]
-// 	})
-
-// 	logger.Infof("Sorted ISR List is: %v", sortedReplicas)
-
-// 	for i := 0; i < len(sortedReplicas); i++ {
-// 		var replica = sortedReplicas[i]
-// 		logger.Infof("Trying to get leader with id %s", replica)
-
-// 		if replica == s.Peer.Host.ID() {
-// 			address, _ := util.ExtractIPAddr(s.Peer.Host.Addrs()[0].String())
-// 			return &pb.LeaderUrlResponse{
-// 				Success:        true,
-// 				Name:           req.Name,
-// 				GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
-// 				GrpcAddress:    fmt.Sprintf("%s:%d", address, s.Peer.GrpcPort),
-// 			}, nil
-// 		}
-// 		peerAddresses := s.Peer.Host.Peerstore().Addrs(replica)
-// 		peerAddress := peerAddresses[0]
-// 		ipAddress, err := util.ExtractIPAddr(peerAddress.String())
-// 		if err != nil {
-// 			logger.Warnf("Failed to extract IP address for peer: %s", replica)
-// 			continue
-// 		}
-// 		peerInfo, err := s.Peer.GetPeerPortsFromDB(replica)
-// 		if err != nil {
-// 			logger.Warnf("failed to get peer ports for peer: %s", replica)
-// 		}
-
-// 		peerInfo, err = s.Peer.GetPeerPortsDirectly(replica)
-// 		if err != nil {
-// 			logger.Warnf("failed to get peer ports directly: %s", replica)
-// 			continue
-// 		}
-
-// 		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
-// 		defer grpcCancel()
-// 		target := fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort)
-// 		conn, err := grpc.DialContext(grpcCtx, target, grpc.WithInsecure(), grpc.WithBlock())
-// 		if err != nil {
-// 			logger.Warnf("failed to connect to peer: %s", target)
-// 			continue
-// 		}
-// 		conn.Close()
-
-// 		leaderUrlResponse := &pb.LeaderUrlResponse{
-// 			Success:        true,
-// 			Name:           req.Name,
-// 			GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", ipAddress, peerInfo.GitDaemonPort, req.Name),
-// 			GrpcAddress:    fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort),
-// 		}
-
-// 		return leaderUrlResponse, nil
-
-// 	}
-
-// 	return &pb.LeaderUrlResponse{
-// 		Success:        false,
-// 		Name:           req.Name,
-// 		GitRepoAddress: "",
-// 		GrpcAddress:    "",
-// 	}, fmt.Errorf("failed to get git address for any insync relplica")
-// }
-
 func (s *RepositoryService) GetLeaderUrl(ctx context.Context, req *pb.LeaderUrlRequest) (*pb.LeaderUrlResponse, error) {
-	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, req.Name)
+	storedLeaderID, err := dhtutil.GetLeaderFromDHT(context.Background(), s.Peer, req.Name)
+
+	if err == nil {
+		addresses, err := s.checkPeerAlive(ctx, storedLeaderID)
+
+		// If current leader alive, just return it
+		if err == nil {
+			return &pb.LeaderUrlResponse{
+				Success:        true,
+				Name:           req.Name,
+				GitRepoAddress: addresses.GitAddress,
+				GrpcAddress:    addresses.GrpcAddress,
+			}, nil
+		}
+	}
+
+	leaderResp, err := s.getLeaderFromRepoPeers(ctx, req.Name, storedLeaderID)
+
+	logger.Debugf("Got leader response for repository: %v", leaderResp)
+
+	if err != nil {
+		logger.Errorf("Failed to get leader from repo peer. Error: %v", err)
+		return nil, err
+	}
+
+	leaderID, err := peer.Decode(leaderResp.LeaderId)
 	if err != nil {
 		return nil, err
 	}
 
-	if repo.LeaderID == s.Peer.Host.ID() {
-		address, _ := util.ExtractIPAddr(s.Peer.Host.Addrs()[0].String())
-		return &pb.LeaderUrlResponse{
-			Success:        true,
-			Name:           req.Name,
-			GitRepoAddress: fmt.Sprintf("git://%s:%d/%s", address, s.Peer.GitDaemonPort, req.Name),
-			GrpcAddress:    fmt.Sprintf("%s:%d", address, s.Peer.GrpcPort),
-		}, nil
-	}
+	logger.Debugf("Leader Id after casting: %s", leaderID)
 
-	addresses, err := s.getPeerAdressesFromId(repo.LeaderID)
+	newLeaderAddresses, err := s.getPeerAdressesFromId(leaderID)
 
-	grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer grpcCancel()
-
-	conn, err := grpc.DialContext(grpcCtx, addresses.GrpcAddress, grpc.WithInsecure(), grpc.WithBlock())
-	defer conn.Close()
 	if err != nil {
-		logger.Warnf("failed to connect to peer: %s", repo.LeaderID)
-
-		electionResp, err := s.initiateElectionWithAnotherPeer(ctx, repo.PeerIDs, req.Name)
-
-		if err != nil {
-			return nil, err
-		}
-
-		newLeaderAddresses, err := s.getPeerAdressesFromId(peer.ID(electionResp.NewLeaderId))
-
-		if err != nil {
-			return nil, err
-		}
-
-		return &pb.LeaderUrlResponse{
-			Success:        true,
-			Name:           req.Name,
-			GitRepoAddress: fmt.Sprintf("%s/%s", newLeaderAddresses.GitAddress, req.Name),
-			GrpcAddress:    newLeaderAddresses.GrpcAddress,
-		}, nil
+		return nil, err
 	}
 
 	return &pb.LeaderUrlResponse{
 		Success:        true,
 		Name:           req.Name,
-		GitRepoAddress: fmt.Sprintf("%s/%s", addresses.GitAddress, req.Name),
-		GrpcAddress:    addresses.GrpcAddress,
+		GitRepoAddress: fmt.Sprintf("%s/%s", newLeaderAddresses.GitAddress, req.Name),
+		GrpcAddress:    newLeaderAddresses.GrpcAddress,
 	}, nil
 }
 
-func (s *RepositoryService) initiateElectionWithAnotherPeer(ctx context.Context, peers []peer.ID, repoName string) (*pb.ElectionResponse, error) {
-	for _, peerID := range peers {
-		if peerID != s.Peer.Host.ID() {
+func (s *RepositoryService) getLeaderFromRepoPeers(ctx context.Context, repoName string, failedLeader peer.ID) (*pb.CurrentLeaderResponse, error) {
+	repo, err := dhtutil.GetRepoInDHT(ctx, s.Peer, repoName)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Debugf("Retrieved repo information from DHT to get leader. Info: %v", repo)
+
+	request := &pb.CurrentLeaderRequest{
+		RepoName: repoName,
+	}
+
+	for _, peerID := range repo.PeerIDs {
+		if peerID != s.Peer.Host.ID() && peerID != failedLeader {
 			addresses, err := s.getPeerAdressesFromId(peerID)
 
 			if err != nil {
-				logger.Warnf("Failed to get peer address to initiate election")
+				logger.Warnf("Failed to get peer address to get current leader. Error: %v", err)
 				continue
 			}
 
-			grpcCtx, grpcCancel := context.WithTimeout(context.Background(), time.Second*5)
+			grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 1*time.Second)
 			defer grpcCancel()
 			conn, err := grpc.DialContext(grpcCtx, addresses.GrpcAddress, grpc.WithInsecure(), grpc.WithBlock())
 			if err != nil {
-				logger.Warnf("failed to connect to peer: %s to start an election", peerID)
+				logger.Warnf("failed to connect to peer: %s to get current leader. Error: %v", peerID, err)
 				// Need to initiate a new election
 				continue
 			}
-			conn.Close()
+			defer conn.Close()
 
 			client := pb.NewElectionClient(conn)
 
-			request := &pb.ElectionRequest{
-				RepoName: repoName,
-				NodeId:   "0",
-			}
-
-			resp, err := client.Election(ctx, request)
+			resp, err := client.GetCurrentLeader(ctx, request)
 			if err != nil {
-				logger.Warnf("Failed to initiate election with error: %v", err)
+				logger.Warnf("Failed to get current leader with error: %v", err)
 				continue
 			}
 
@@ -453,11 +377,15 @@ func (s *RepositoryService) initiateElectionWithAnotherPeer(ctx context.Context,
 		}
 	}
 
-	return nil, errors.New("no reachable peer found to initiate election")
+	// If no other peers alive. Call my local. This just makes sure that the db get updated etc.
+	return s.PeerElectionService.GetCurrentLeader(ctx, request)
 }
 
 func (s *RepositoryService) getPeerAdressesFromId(peerID peer.ID) (*p2p.PeerAddresses, error) {
 	peerAddresses := s.Peer.Host.Peerstore().Addrs(peerID)
+	if len(peerAddresses) == 0 {
+		return nil, fmt.Errorf("Failed to get peer addresses for peer with ID %s from peer store", peerID.String())
+	}
 	peerAddress := peerAddresses[0]
 	ipAddress, err := util.ExtractIPAddr(peerAddress.String())
 	if err != nil {
@@ -476,7 +404,7 @@ func (s *RepositoryService) getPeerAdressesFromId(peerID peer.ID) (*p2p.PeerAddr
 	return &p2p.PeerAddresses{
 		ID:          peerID,
 		GitAddress:  fmt.Sprintf("git://%s:%d", ipAddress, peerInfo.GitDaemonPort),
-		GrpcAddress: fmt.Sprintf("%s:%s", peerAddress, peerInfo.GrpcPort),
+		GrpcAddress: fmt.Sprintf("%s:%d", ipAddress, peerInfo.GrpcPort),
 	}, nil
 }
 
@@ -531,4 +459,23 @@ func (s *RepositoryService) Pull(ctx context.Context, req *pb.RepoPullRequest) (
 		Success:     false,
 		RepoAddress: "",
 	}, fmt.Errorf("failed to get git address for any insync relplica")
+}
+
+func (s *RepositoryService) checkPeerAlive(ctx context.Context, peerID peer.ID) (*p2p.PeerAddresses, error) {
+	peerAddress, err := util.GetPeerAdressesFromId(peerID, s.Peer)
+
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
+	conn, err := grpc.DialContext(ctx, peerAddress.GrpcAddress, grpc.WithInsecure())
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	return peerAddress, nil
 }
