@@ -78,9 +78,11 @@ func (s *RepositoryService) AcquireLock(ctx context.Context, req *pb.AcquireLock
 // ReleaseRepositoryLock releases the lock for a repository
 func (s *RepositoryService) ReleaseRepositoryLock(repoName string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	logger.Debugf("Push in progress map before deleting: %v", s.PushInProgress)
+	logger.Debugf("Deleting key %s from InProgressPushed map", repoName)
 	delete(s.PushInProgress, repoName)
+	logger.Debugf("Push in progress map after deleting: %v", s.PushInProgress)
+	s.mu.Unlock()
 }
 
 // Init handles the initialization of a repository
