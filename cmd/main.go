@@ -1,3 +1,4 @@
+// Package main is the entry point of the P2P code collaboration application
 package main
 
 import (
@@ -5,9 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
-
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/api"
+	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/database"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/flags"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/gitops"
 	"github.com/Ahmed-I-Abdullah/p2p-code-collaboration/internal/p2p"
@@ -15,6 +15,9 @@ import (
 	"github.com/ipfs/go-log/v2"
 )
 
+// main is the entry point of the P2P code collaboration application
+// It initializes the application, parses flags, sets up the database connection
+// initializes peers, starts the gRPC server, and starts the Git daemon server
 func main() {
 	logger := log.Logger("main")
 	log.SetLogLevel("main", "info")
@@ -24,12 +27,14 @@ func main() {
 	logger.Info("Parsing input flags")
 	ctx := context.Background()
 
+	// Parse input flags
 	config, err := flags.ParseFlags()
 	if err != nil {
 		logger.Errorf("Error parsing flags: %v", err)
 		return
 	}
 
+	// Initialize database connection if not a bootstrap node
 	if !config.IsBootstrap {
 		err = database.Init(config.GrpcPort)
 		if err != nil {
@@ -39,6 +44,7 @@ func main() {
 		defer database.Close()
 	}
 
+	// Check if required flags are provided
 	if config.GrpcPort == 0 && !config.IsBootstrap {
 		logger.Fatalf("Please provide a Grpc server port using the grpcport flag")
 		return
@@ -49,7 +55,7 @@ func main() {
 		return
 	}
 
-	// Initialize peers, DHT and p2p protocol
+	// Initialize peers, DHT, and P2P protocol
 	peer, err := p2p.Initialize(config)
 	if err != nil {
 		logger.Fatalf("Failed to initialize P2P: %v", err)
@@ -57,9 +63,10 @@ func main() {
 		logger.Info("Initialized Peer")
 	}
 
+	// Initialize Git operations
 	git := gitops.New(config.ReposDirectory)
 
-	// Initialize gRPC server
+	// Start gRPC server
 	go func() {
 		if err := api.StartServer(ctx, peer, git); err != nil {
 			logger.Fatalf("Failed to start gRPC server: %v", err)
@@ -92,5 +99,6 @@ func main() {
 
 	logger.Info("Started Git Daemon Server")
 
+	// Block forever to keep the application running
 	select {}
 }

@@ -1,3 +1,4 @@
+// Package api provides the implementation of gRPC APIs for managing leader election and repository related functionalities
 package api
 
 import (
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 )
 
+// ElectionService provides methods to handle leader election and leader announcement in the peer-to-peer network
 type ElectionService struct {
 	pb.UnimplementedElectionServer
 	Peer              *p2p.Peer
@@ -21,6 +23,7 @@ type ElectionService struct {
 	mu                sync.Mutex
 }
 
+// NewElectionService creates a new instance of ElectionService with the provided peer
 func NewElectionService(peer *p2p.Peer) *ElectionService {
 	return &ElectionService{
 		Peer:              peer,
@@ -28,16 +31,20 @@ func NewElectionService(peer *p2p.Peer) *ElectionService {
 	}
 }
 
+// Ping is a simple method to check connectivity with the peer
 func (s *ElectionService) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
 	logger.Debug("Received ping from client")
 	return &pb.PingResponse{}, nil
 }
 
+// GetCurrentLeader retrieves the current leader for the specified repository, or starts a new election if no leader is found
 func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentLeaderRequest) (*pb.CurrentLeaderResponse, error) {
+	// Lock to prevent concurrent access to ElectionInProcess map
 	s.mu.Lock()
 	electionInProgress, ok := s.ElectionInProcess[req.RepoName]
 	s.mu.Unlock()
 
+	// Do not initiate an election if there is an election in progress
 	if electionInProgress {
 		logger.Debugf("Election in progress for repository %s", req.RepoName)
 		return nil, fmt.Errorf("Cannot get leader. Election in progress for repository %s", req.RepoName)
@@ -59,6 +66,7 @@ func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentL
 		}
 	}
 
+	// Check if the current leader is alive
 	leader, err := s.checkLeaderAlive(ctx, req.RepoName)
 	if err != nil {
 		logger.Debugf("Starting a new election for repository %s as current leader is found to be not alive", req.RepoName)
@@ -79,6 +87,7 @@ func (s *ElectionService) GetCurrentLeader(ctx context.Context, req *pb.CurrentL
 	return &pb.CurrentLeaderResponse{LeaderId: leader}, nil
 }
 
+// Election initiates an election process for a repository
 func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest) (*pb.ElectionResponse, error) {
 	// Check for ongoing election
 	s.mu.Lock()
@@ -94,11 +103,11 @@ func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest)
 		return &pb.ElectionResponse{Type: pb.ElectionType_OTHER.String()}, nil
 	}
 
-	// Set flag for ongoing election
+	// Set InProgress flag for ongoing election
 	s.ElectionInProcess[req.RepoName] = true
 	s.mu.Unlock()
 
-	// Spawning a new goroutine for election process
+	// Spawn a new goroutine for election process
 	electionResult := make(chan string, 1)
 	go s.startElection(req.RepoName, electionResult)
 
@@ -112,6 +121,7 @@ func (s *ElectionService) Election(ctx context.Context, req *pb.ElectionRequest)
 	}
 }
 
+// startElection starts the election process for the specified repository.
 func (s *ElectionService) startElection(repoName string, electionResult chan<- string) {
 	defer func() {
 		// Clean up flag after election
@@ -122,6 +132,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 
 	logger.Debugf("Starting election for repository %s", repoName)
 
+	// Retrieve DHT record for the repository
 	dhtRecord, err := dhtutil.GetRepoInDHT(context.Background(), s.Peer, repoName)
 	if err != nil {
 		logger.Debugf("Error getting DHT record for repository %s: %v", repoName, err)
@@ -130,6 +141,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 
 	allPeerAddresses := make(map[string]*p2p.PeerAddresses)
 
+	// Retrieve addresses of all peers in the DHT (peers storing the repository)
 	for _, p := range dhtRecord.PeerIDs {
 		if p != s.Peer.Host.ID() {
 			addresses, err := util.GetPeerAdressesFromID(p, s.Peer)
@@ -143,6 +155,8 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 	}
 
 	var highIdPeers []*p2p.PeerAddresses
+
+	// Filter peers with higher IDs
 	for _, p := range dhtRecord.InSyncReplicas {
 		if p.String() > s.Peer.Host.ID().String() {
 			if addresses, exists := allPeerAddresses[p.String()]; exists {
@@ -162,7 +176,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 
 	electionCh := make(chan string, len(highIdPeers))
 
-	// Send election messages to peers with higher IDs.
+	// Send election messages to peers with higher IDs
 	for _, p := range highIdPeers {
 		go func(peerAddress *p2p.PeerAddresses) {
 			logger.Debugf("Contacting peer with higher ID for election: %s", peerAddress.ID.String())
@@ -170,6 +184,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 		}(p)
 	}
 
+	// Wait for election results from peers with higher IDs
 	var leader string
 	for i := 0; i < len(highIdPeers); i++ {
 		select {
@@ -186,7 +201,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 
 	if leader == "" {
 		logger.Debugf("No leader elected. Current node (%s) is the leader", s.Peer.Host.ID().String())
-		// If no leader is elected, then current node is the leader
+		// If no leader is elected, then the current node is the leader
 		leader = s.Peer.Host.ID().String()
 	} else {
 		logger.Debugf("Elected leader: %s", leader)
@@ -209,6 +224,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 		}
 	}
 
+	// If the leader didn't change, there is no need to store it again
 	if err == nil && storedLeaderID != leaderID {
 		err = dhtutil.StoreLeaderInDHT(context.Background(), s.Peer, repoName, leaderID)
 		if err != nil {
@@ -226,6 +242,7 @@ func (s *ElectionService) startElection(repoName string, electionResult chan<- s
 	electionResult <- leader
 }
 
+// announceLeader announces the leader to other peers in the network.
 func (s *ElectionService) announceLeader(repoName string, leader string, peers map[string]*p2p.PeerAddresses) {
 	for _, peerAddress := range peers {
 		if peerAddress.ID.Pretty() != leader {
@@ -245,6 +262,7 @@ func (s *ElectionService) announceLeader(repoName string, leader string, peers m
 	}
 }
 
+// contactPeerForElection contacts a peer for an election and receives election results by sending them to a go channel
 func (s *ElectionService) contactPeerForElection(addresses *p2p.PeerAddresses, repoName string, ch chan<- string) {
 	logger.Debugf("contactPeerForElection: Contacting peer with ID %s for leader election for repo: %s", addresses.ID.String(), repoName)
 
@@ -273,6 +291,7 @@ func (s *ElectionService) contactPeerForElection(addresses *p2p.PeerAddresses, r
 	}
 }
 
+// LeaderAnnouncement is called to acknowledge the leader announcement message from other peers
 func (s *ElectionService) LeaderAnnouncement(ctx context.Context, req *pb.LeaderAnnouncementRequest) (*pb.LeaderAnnouncementResponse, error) {
 	s.mu.Lock()
 	s.ElectionInProcess[req.RepoName] = false
@@ -281,6 +300,7 @@ func (s *ElectionService) LeaderAnnouncement(ctx context.Context, req *pb.Leader
 	return &pb.LeaderAnnouncementResponse{}, nil
 }
 
+// checkLeaderAlive checks if the current leader for a repository is alive.
 func (s *ElectionService) checkLeaderAlive(ctx context.Context, repoName string) (string, error) {
 	leaderID, err := dhtutil.GetLeaderFromDHT(ctx, s.Peer, repoName)
 	if err != nil {
