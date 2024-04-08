@@ -1,12 +1,23 @@
-# P2P Code Collaboration Application
+# P2P Code Collaboration Application (CPSC 559 Final Project)
 
-This application is a peer-to-peer (P2P) networking implementation using Go and the libp2p framework.
+## Team Members
+| Group \#:      |  2   |
+| -------------- | --- |
+| Student Names: | Ahmed Abdullah |
+|                | Rayyan Khalil |
+|                | Ammar Elzeftawy |
+|                | Rahat Islam |
+|                | Ahmed Waly |
+
+## Overview
+The code collaboration system is built and ran on a peer-to-peer (P2P) distributed network architecture using Go and the libp2p framework. A code repository will be shared amongst different peers within the network, such that each peer will store the repository locally. Additionally, each peer will be able to initialize new code repositories, push new changes to the repository, and pull the latest repository version. A user will be able to access the system and use these functionalities through a Command Line Interface (CLI) on their local machine.
+
 
 ## Installation
 
 ### Prerequisites
 
-- Go (I am using version 1.20)
+- Go (version 1.20)
 
 ### Clone the Repository
 ```bash
@@ -66,9 +77,13 @@ For example:
 ./p2p -listen /ip4/172.20.10.12/tcp/6667 -rendezvous test -grpcport 3000 -gitport 3001  -priv_key ./.priv_key -repos_dir repos1 -peer /ip4/172.20.10.12/tcp/6666/p2p/12D3KooWKV9yGUYG5KBwmj5hge332gYzKhwaJ9RjBJX2HE86zYVt
 ```
 
-### Running a Git Init Operation (This is just for testing, it will be moved to the CLI)
-1. Change line 18 in `cmd/client/client.go` with the address of your peer's gRPC server.
-2. Change line 19 in `cmd/client/client.go` to your desired repository name.
+### Running a Git Operation
+
+1. Run `git-peer init (repo name)` to initialize a bare repo with that repo name
+2. Run `git-peer pull (repo name)` to pull the latest changes from that repo name
+3. Run `git-peer add` to add any new local changes to the staging area
+4. Run `git-peer commit -m "(message)"` to commit any changes in the staging area
+5. Run `git-peer push` to push all commits to the leader branch
 
 
 
