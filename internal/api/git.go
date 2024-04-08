@@ -51,13 +51,10 @@ func Init() {
 
 // AcquireLock handles the request to acquire a lock for a repository in order to start a push operation
 func (s *RepositoryService) AcquireLock(ctx context.Context, req *pb.AcquireLockRequest) (*pb.AcquireLockResponse, error) {
-	// Mutex lock to prevent concurrent access to the PushInProgress map
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	anotherPushInProgress, ok := s.PushInProgress[req.RepoName]
+	s.mu.Unlock()
 
-	// reject acquire request if another push is in progress
 	if anotherPushInProgress {
 		logger.Warnf("AcquireLock: Another push in progress for repository %s. Rejecting request.", req.RepoName)
 		return &pb.AcquireLockResponse{
@@ -67,7 +64,9 @@ func (s *RepositoryService) AcquireLock(ctx context.Context, req *pb.AcquireLock
 
 	if !ok {
 		logger.Debugf("No push in progress for repository %s. Accepting lock acquire request.", req.RepoName)
+		s.mu.Lock()
 		s.PushInProgress[req.RepoName] = true
+		s.mu.Unlock()
 	}
 
 	return &pb.AcquireLockResponse{
