@@ -1,3 +1,5 @@
+// Package database provides functionalities for storing and retreiving data from a BadgerDB database
+// BadgerDB is a key-value store written in Go
 package database
 
 import (
@@ -9,8 +11,13 @@ import (
 )
 
 var logger = log.Logger("database")
+
+// DBCon represents the connection to the BadgerDB database
 var DBCon *badger.DB
 
+// Init initializes the BadgerDB database connection
+// It takes an integer id as input for the badgerDB folder path and initializes the database connection
+// It returns an error if there's any issue initializing the database connection
 func Init(id int) error {
 	err := log.SetLogLevel("database", "info")
 	if err != nil {
@@ -27,6 +34,7 @@ func Init(id int) error {
 	return nil
 }
 
+// Close closes the BadgerDB database connection
 func Close() {
 	err := DBCon.Close()
 	if err != nil {
@@ -34,6 +42,8 @@ func Close() {
 	}
 }
 
+// Get retrieves the value associated with the given key from the database
+// It returns the value and any error encountered during the retrieval process
 func Get(key []byte) ([]byte, error) {
 	var valCpy []byte
 	err := DBCon.View(func(txn *badger.Txn) error {
@@ -55,7 +65,8 @@ func Get(key []byte) ([]byte, error) {
 	return valCpy, err
 }
 
-// Put save a key-pair in the DB with a TTL of 10 minutes
+// Put saves a key-value pair in the database with a Time-To-Live (TTL) of 10 minutes
+// It returns an error if there's any issue during the write operation
 func Put(key []byte, val []byte) error {
 	err := DBCon.Update(func(txn *badger.Txn) error {
 		entry := badger.NewEntry(key, val).WithTTL(time.Minute * 10)
