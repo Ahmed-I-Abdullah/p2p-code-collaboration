@@ -70,7 +70,10 @@ func (s *RepositoryService) AcquireLock(ctx context.Context, req *pb.AcquireLock
 
 func (s *RepositoryService) ReleaseRepositoryLock(repoName string) {
 	s.mu.Lock()
+	logger.Debugf("Push in progress map before deleting: %v", s.PushInProgress)
+	logger.Debugf("Deleting key %s from InProgressPushed map", repoName)
 	delete(s.PushInProgress, repoName)
+	logger.Debugf("Push in progress map after deleting: %v", s.PushInProgress)
 	s.mu.Unlock()
 }
 
