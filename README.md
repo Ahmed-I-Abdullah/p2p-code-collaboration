@@ -44,6 +44,10 @@ Passive replication pushing to repositories:
 - **BadgerDB:** Embedded KV store that stores the connection information of different peers in the network.
 
 
+https://github.com/Ahmed-I-Abdullah/p2p-code-collaboration/assets/70468508/09de64cf-7a39-49b0-b2bd-b19e2fe4d4bf
+
+
+
 ### Consistency
 **Consistency model:** Strict order only on the write operations per repo.
 
@@ -65,6 +69,7 @@ Steps to push to a repo:
 5. Master node updates repository version and stores updated record in DHT.
 
 The video below shows an example of a push operation:<br/>
+
 https://github.com/Ahmed-I-Abdullah/p2p-code-collaboration/assets/70468508/22fb3a01-e1c9-4794-b130-ec96425d6aba
 
 
