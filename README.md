@@ -4,7 +4,7 @@
 
 
 ## Overview
-This project is a code collaboration tool simialr to Github except it runs on a on a peer-to-peer (P2P) distributed network architecture. It is built using Go and the libp2p framework.
+This project is a code collaboration tool similar to Github except it runs on a on a peer-to-peer (P2P) distributed network architecture. It is built using Go and the libp2p framework.
 
 ### Overall Architecture
 Peer Groups:
