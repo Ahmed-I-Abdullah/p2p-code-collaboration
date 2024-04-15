@@ -42,6 +42,8 @@ Peer Groups:
 4. Master node updates ISR list with IDs of successful peers.
 5. Master node updates repository version and stores updated record in DHT.
 
+https://github.com/Ahmed-I-Abdullah/p2p-code-collaboration/assets/70468508/22fb3a01-e1c9-4794-b130-ec96425d6aba
+
 
 
 ## Installation
