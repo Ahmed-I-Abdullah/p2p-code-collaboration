@@ -1,4 +1,4 @@
-# P2P Code Collaboration Application (CPSC 559 Final Project)
+# P2P Code Collaboration Application
 
 ## Team Members
 | Group \#:      |  2   |
@@ -10,7 +10,38 @@
 |                | Ahmed Waly |
 
 ## Overview
-The code collaboration system is built and ran on a peer-to-peer (P2P) distributed network architecture using Go and the libp2p framework. A code repository will be shared amongst different peers within the network, such that each peer will store the repository locally. Additionally, each peer will be able to initialize new code repositories, push new changes to the repository, and pull the latest repository version. A user will be able to access the system and use these functionalities through a Command Line Interface (CLI) on their local machine.
+This project is a code collaboration tool simialr to Github except it runs on a on a peer-to-peer (P2P) distributed network architecture. It is built using Go and the libp2p framework.
+
+### Overall Architecture
+Peer Groups:
+- Each repository is stored on a group of N nodes.
+- Each Peer group has a leader and a lock.
+
+![Architecture Diagram](./images/Architecture_Diagram.png?raw=true "Architecture Diagram")
+
+### Communication Model
+
+- gRPC Server: The core API of the network that handles requests such as repo initialization and lock acquisitions through remote procedure calls.
+
+- Stream Handlers: Built over TCP, facilitate communication between the peers in the network.
+
+- Git Daemon: Uses the git protocol for various features such as push and pull.
+
+- BadgerDB: Acts as a cache to store peer connection information upon discovery.
+
+- Distributed Hash Table (DHT): Used for Peer Discovery and mapping which peers own which repo.
+
+![Communication Model](./images/Communication_Model.png?raw=true "Communication Model")
+
+
+### Consistency
+**Consistency model:** Strict order only on the write operations per repo.
+1. Contact the master peer (for that repo) and request to push code.
+2. A lock is set on the peer giving the peer permission to push it’s changes.
+3. Once the master receives those changes, it forwards those changes to all the other peers that are storing that repo.
+4. Master node updates ISR list with IDs of successful peers.
+5. Master node updates repository version and stores updated record in DHT.
+
 
 
 ## Installation
