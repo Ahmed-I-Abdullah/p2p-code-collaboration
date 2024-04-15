@@ -1,4 +1,7 @@
-# P2P Code Collaboration Application
+# Git Peer - Secure your code
+
+![Git Peer](./images/git-peer.png)
+
 
 ## Overview
 This project is a code collaboration tool simialr to Github except it runs on a on a peer-to-peer (P2P) distributed network architecture. It is built using Go and the libp2p framework.
@@ -30,12 +33,10 @@ Peer Groups:
 Active replication when initializing repositories:
 1. gRPC server collects N **Alive** peers from its peer store or tries to discover new peers
 2. Send an Init request to all N peers<br/><br/>
-<img src="./images/Repo_Init.png" alt="Initializing a Repository" width="700">
 
 Passive replication pushing to repositories:
 1. Leader recives new code from client
 2. Pushes the code to each of the follower peers<br/><br/>
-<img src="./images/Push.png" alt="Pushing to a repository" width="500">
 
 
 ### Fault Tolerance Mechanisms
@@ -57,7 +58,7 @@ Bully Leader Election Algorithm:
 - Bully leader election: prioritizing peers based on highest ID for selection. 
 - Only the peers stored in the ISR list are candidates for the leader election.
 
-<img src="./images/bully_leader_election.png" alt="Bully Leader Election" width="500">
+<img src="./images/bully_leader_election.png" alt="Bully Leader Election" width="300">
 
 
 #### Pushing to a repositroy
