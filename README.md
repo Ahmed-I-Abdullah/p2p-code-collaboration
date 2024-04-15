@@ -1,14 +1,5 @@
 # P2P Code Collaboration Application
 
-## Team Members
-| Group \#:      |  2   |
-| -------------- | --- |
-| Student Names: | Ahmed Abdullah |
-|                | Rayyan Khalil |
-|                | Ammar Elzeftawy |
-|                | Rahat Islam |
-|                | Ahmed Waly |
-
 ## Overview
 This project is a code collaboration tool simialr to Github except it runs on a on a peer-to-peer (P2P) distributed network architecture. It is built using Go and the libp2p framework.
 
@@ -17,7 +8,8 @@ Peer Groups:
 - Each repository is stored on a group of N nodes.
 - Each Peer group has a leader and a lock.
 
-![Architecture Diagram](./images/Architecture_Diagram.png?raw=true "Architecture Diagram")
+<img src="./images/Architecture_Diagram.png" alt="Architecture Diagram" width="700">
+
 
 ### Communication Model
 
@@ -31,17 +23,48 @@ Peer Groups:
 
 - Distributed Hash Table (DHT): Used for Peer Discovery and mapping which peers own which repo.
 
-![Communication Model](./images/Communication_Model.png?raw=true "Communication Model")
+<img src="./images/Communication_Model.png" alt="Communication Model" width="700">
+
+
+### Replication
+Active replication when initializing repositories:
+1. gRPC server collects N **Alive** peers from its peer store or tries to discover new peers
+2. Send an Init request to all N peers<br/><br/>
+<img src="./images/Repo_Init.png" alt="Initializing a Repository" width="700">
+
+Passive replication pushing to repositories:
+1. Leader recives new code from client
+2. Pushes the code to each of the follower peers<br/><br/>
+<img src="./images/Push.png" alt="Pushing to a repository" width="500">
+
+
+### Fault Tolerance Mechanisms
+- **Redundancy:** Storing DHT and repos across multiple peers.
+- **ISR List:** A list of peers that have the latest code version.
+- **BadgerDB:** Embedded KV store that stores the connection information of different peers in the network.
 
 
 ### Consistency
 **Consistency model:** Strict order only on the write operations per repo.
+
+#### Leader election
+Bully Leader Election Algorithm:
+- One leader is chosen for every repository in order to have a central authority on push operations.
+- Bully leader election: prioritizing peers based on highest ID for selection. 
+- Only the peers stored in the ISR list are candidates for the leader election.
+
+<img src="./images/bully_leader_election.png" alt="Bully Leader Election" width="500">
+
+
+#### Pushing to a repositroy
+Steps to push to a repo:
 1. Contact the master peer (for that repo) and request to push code.
 2. A lock is set on the peer giving the peer permission to push it’s changes.
 3. Once the master receives those changes, it forwards those changes to all the other peers that are storing that repo.
 4. Master node updates ISR list with IDs of successful peers.
 5. Master node updates repository version and stores updated record in DHT.
 
+The video below shows an example of a push operation:<br/>
 https://github.com/Ahmed-I-Abdullah/p2p-code-collaboration/assets/70468508/22fb3a01-e1c9-4794-b130-ec96425d6aba
 
 
